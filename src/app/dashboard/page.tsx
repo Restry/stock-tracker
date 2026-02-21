@@ -363,7 +363,7 @@ export default function DashboardPage() {
                       </td>
                       <td className="px-5 py-3.5 text-right font-mono">
                         {h.cost_price
-                          ? <span>{formatCurrency(parseFloat(h.cost_price), h.cost_currency)}</span>
+                          ? <span>{formatCurrency(parseFloat(h.cost_price), h.price_currency)}</span>
                           : <span className="text-muted-dark">—</span>}
                       </td>
                       <td className="px-5 py-3.5 text-right font-mono font-medium">
