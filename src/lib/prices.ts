@@ -7,6 +7,13 @@ export interface Quote {
   change?: number;
   changePercent?: number;
   previousClose?: number;
+  // Enhanced indicators
+  pe?: number;
+  marketCap?: number;
+  dividendYield?: number;
+  fiftyTwoWeekHigh?: number;
+  fiftyTwoWeekLow?: number;
+  averageVolume?: number;
 }
 
 const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
@@ -29,10 +36,12 @@ async function fetchYahooQuote(symbol: string): Promise<Quote | null> {
     });
     if (!res.ok) return null;
     const data = await res.json();
-    const meta = data?.chart?.result?.[0]?.meta;
+    const result = data?.chart?.result?.[0];
+    const meta = result?.meta;
     if (!meta?.regularMarketPrice) return null;
     const price = meta.regularMarketPrice;
     const prevClose = meta.chartPreviousClose || meta.previousClose || price;
+    
     return {
       symbol,
       price,
@@ -40,6 +49,13 @@ async function fetchYahooQuote(symbol: string): Promise<Quote | null> {
       previousClose: prevClose,
       change: price - prevClose,
       changePercent: prevClose > 0 ? ((price - prevClose) / prevClose) * 100 : 0,
+      // Extracted from v8 chart meta/indicators
+      pe: meta.trailingPE || meta.pe,
+      marketCap: meta.marketCap,
+      dividendYield: meta.dividendYield,
+      fiftyTwoWeekHigh: meta.fiftyTwoWeekHigh,
+      fiftyTwoWeekLow: meta.fiftyTwoWeekLow,
+      averageVolume: meta.averageVolume,
     };
   } catch {
     return null;
@@ -66,6 +82,13 @@ async function fetchYahooV6Quote(symbol: string): Promise<Quote | null> {
       previousClose: q.regularMarketPreviousClose,
       change: q.regularMarketChange,
       changePercent: q.regularMarketChangePercent,
+      // Enhanced v6 indicators
+      pe: q.trailingPE || q.forwardPE,
+      marketCap: q.marketCap,
+      dividendYield: q.dividendYield,
+      fiftyTwoWeekHigh: q.fiftyTwoWeekHigh,
+      fiftyTwoWeekLow: q.fiftyTwoWeekLow,
+      averageVolume: q.averageVolume,
     };
   } catch {
     return null;
@@ -135,6 +158,10 @@ export function convertToUsd(price: number, currency: string): number {
   if (currency === "HKD") return price * HKD_TO_USD;
   if (currency === "CNY") return price * 0.138;
   return price;
+}
+
+export async function getQuote(symbol: string): Promise<Quote | null> {
+  return await fetchQuote(symbol);
 }
 
 export async function updateAllPrices(): Promise<Quote[]> {

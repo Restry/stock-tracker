@@ -1,4 +1,5 @@
 import pool from "./db";
+import { getQuote, convertToUsd } from "./prices";
 
 export interface Decision {
   symbol: string;
@@ -85,7 +86,8 @@ function analyzeSignals(
   currentPrice: number,
   costPrice: number | null,
   shares: number,
-  news: string
+  news: string,
+  quote?: any
 ): Decision {
   const { score: sentimentScore, positiveHits, negativeHits } = computeSentimentScore(news);
 
@@ -97,54 +99,81 @@ function analyzeSignals(
   let pnlPct = 0;
   if (costPrice && costPrice > 0 && currentPrice > 0) {
     pnlPct = ((currentPrice - costPrice) / costPrice) * 100;
-    reasons.push(`Position P&L: ${pnlPct >= 0 ? "+" : ""}${pnlPct.toFixed(1)}%`);
   }
+
+  // --- MSFT Special Rules ---
+  const isMSFT = symbol === "MSFT";
+  const now = new Date();
+  const isQuarterEndMonth = [2, 5, 8, 11].includes(now.getMonth()); // March, June, Sept, Dec
+  const isQuarterEndDays = now.getDate() >= 25;
+  const isQuarterEnd = isQuarterEndMonth && isQuarterEndDays;
 
   // Sentiment analysis
   if (positiveHits.length > 0) {
-    reasons.push(`Positive signals: ${positiveHits.slice(0, 4).join(", ")}`);
+    reasons.push(`利好因素: ${positiveHits.slice(0, 4).join(", ")}`);
   }
   if (negativeHits.length > 0) {
-    reasons.push(`Risk factors: ${negativeHits.slice(0, 4).join(", ")}`);
+    reasons.push(`风险因素: ${negativeHits.slice(0, 4).join(", ")}`);
   }
 
   // Decision logic with multi-factor scoring
   let signalStrength = 0;
-
-  // Factor 1: Sentiment (weight: 40%)
   signalStrength += sentimentScore * 40;
 
-  // Factor 2: P&L momentum (weight: 30%)
   if (costPrice && costPrice > 0) {
-    if (pnlPct > 30) signalStrength -= 15; // Take profits signal
+    if (pnlPct > 30) signalStrength -= 15;
     else if (pnlPct > 10) signalStrength += 10;
-    else if (pnlPct < -20) signalStrength += 15; // Buy the dip
-    else if (pnlPct < -10) signalStrength -= 5;
+    else if (pnlPct < -20) signalStrength += 15;
   }
 
-  // Factor 3: News volume (weight: 15%)
+  // --- Enhanced Indicator Scoring ---
+  if (quote) {
+    // 估值因子: 低PE且有盈利增长利好时加分
+    if (quote.pe && quote.pe < 25 && sentimentScore > 0) {
+      signalStrength += 10;
+      reasons.push(`估值吸引力 (PE: ${quote.pe})`);
+    }
+    // 股息因子: 高股息加分
+    if (quote.dividendYield && quote.dividendYield > 1.5) {
+      signalStrength += 5;
+      reasons.push(`股息支撑 (${quote.dividendYield.toFixed(2)}%)`);
+    }
+    // 价格区间因子: 接近52周低点且有基本面支撑时，视为抄底机会
+    if (quote.low52 && currentPrice < quote.low52 * 1.15 && sentimentScore > 0) {
+      signalStrength += 15;
+      reasons.push("接近52周低位，存在超跌反弹空间");
+    }
+  }
+
   const newsVolume = positiveHits.length + negativeHits.length;
   if (newsVolume >= 5) signalStrength += sentimentScore > 0 ? 10 : -10;
 
-  // Factor 4: Position size consideration (weight: 15%)
-  if (shares > 0 && pnlPct > 25) {
-    signalStrength -= 10;
-    reasons.push("Large unrealized gains suggest profit-taking opportunity");
-  }
-
-  // Determine action
-  if (signalStrength > 15) {
-    action = "BUY";
-    confidence = Math.min(85, 55 + Math.floor(signalStrength));
-    reasons.unshift(`Strong buy signal for ${symbol}. Multi-factor analysis indicates positive outlook.`);
-  } else if (signalStrength < -15) {
-    action = "SELL";
-    confidence = Math.min(85, 55 + Math.floor(Math.abs(signalStrength)));
-    reasons.unshift(`Sell signal for ${symbol}. Risk factors outweigh positive indicators.`);
+  // Final Action Logic
+  if (isMSFT) {
+    if (isQuarterEnd && signalStrength > 0) {
+      action = "BUY";
+      confidence = 80;
+      reasons.unshift("季度末自动定投触发：MSFT 仅在季度末进行常规买入。");
+    } else {
+      action = signalStrength < -25 ? "SELL" : "HOLD";
+      confidence = 60;
+      reasons.unshift(action === "SELL" ? "MSFT 卖出信号：基本面或技术面显著恶化。" : "MSFT 观察中：非季度末不执行自动买入。");
+    }
   } else {
-    action = "HOLD";
-    confidence = 50 + Math.floor(Math.abs(signalStrength));
-    reasons.unshift(`Neutral outlook for ${symbol}. Maintaining current position.`);
+    // Xiaomi regular rules
+    if (signalStrength > 15) {
+      action = "BUY";
+      confidence = Math.min(95, 55 + Math.floor(signalStrength));
+      reasons.unshift(`${symbol} 强烈买入：多因子分析显示前景乐观。`);
+    } else if (signalStrength < -15) {
+      action = "SELL";
+      confidence = Math.min(95, 55 + Math.floor(Math.abs(signalStrength)));
+      reasons.unshift(`${symbol} 卖出：风险因素超过利好指标。`);
+    } else {
+      action = "HOLD";
+      confidence = 50 + Math.floor(Math.abs(signalStrength));
+      reasons.unshift(`${symbol} 中性持仓。`);
+    }
   }
 
   const marketData = {
@@ -153,9 +182,13 @@ function analyzeSignals(
     pnlPct: pnlPct.toFixed(2),
     sentimentScore: sentimentScore.toFixed(2),
     signalStrength: signalStrength.toFixed(1),
-    positiveSignals: positiveHits.length,
-    negativeSignals: negativeHits.length,
-    analysisTimestamp: new Date().toISOString(),
+    pe: quote?.pe,
+    marketCap: quote?.marketCap,
+    divYield: quote?.dividendYield,
+    high52: quote?.fiftyTwoWeekHigh,
+    low52: quote?.fiftyTwoWeekLow,
+    isQuarterEnd,
+    analysisTimestamp: now.toISOString(),
   };
 
   return {
@@ -179,13 +212,17 @@ async function executeSimulatedTrade(
 
   let tradeShares = 0;
   if (decision.action === "BUY") {
-    // Simulate buying 10-50 shares scaled by confidence
-    tradeShares = Math.max(10, Math.floor((decision.confidence / 100) * 50));
+    if (decision.symbol === "MSFT") {
+      // MSFT: ~21,000 CNY = ~$2,900 USD
+      const targetUsd = 2900;
+      tradeShares = Math.floor(targetUsd / currentPrice);
+    } else {
+      // Xiaomi: scales by confidence (200-1000 shares)
+      tradeShares = Math.max(200, Math.floor((decision.confidence / 100) * 1000));
+    }
   } else if (decision.action === "SELL") {
-    // Sell 10-25% of position based on confidence
     const sellPct = Math.min(0.25, decision.confidence / 400);
     tradeShares = Math.max(1, Math.floor(currentShares * sellPct));
-    if (tradeShares > currentShares) tradeShares = currentShares;
   }
 
   if (tradeShares <= 0) return null;
@@ -196,7 +233,7 @@ async function executeSimulatedTrade(
     shares: tradeShares,
     price: currentPrice,
     currency,
-    reason: `AI ${decision.action} @ ${decision.confidence}% confidence`,
+    reason: decision.reasoning,
   };
 
   // Record the trade
@@ -205,13 +242,13 @@ async function executeSimulatedTrade(
     [trade.symbol, trade.action, trade.shares, trade.price, trade.currency, trade.reason]
   );
 
-  // Update holdings (simulated)
+  // Update holdings
   if (decision.action === "BUY") {
     await pool.query(
       `UPDATE "st-holdings" SET shares = shares + $1 WHERE symbol = $2`,
       [tradeShares, decision.symbol]
     );
-  } else if (decision.action === "SELL" && tradeShares > 0) {
+  } else if (decision.action === "SELL") {
     await pool.query(
       `UPDATE "st-holdings" SET shares = GREATEST(0, shares - $1) WHERE symbol = $2`,
       [tradeShares, decision.symbol]
@@ -222,22 +259,31 @@ async function executeSimulatedTrade(
 }
 
 export async function runDecisions(): Promise<{ decisions: Decision[]; trades: Trade[] }> {
-  const { rows } = await pool.query(
+  // First, ensure prices are fresh
+  const { rows: holdings } = await pool.query(
     `SELECT symbol, current_price, cost_price, shares, price_currency FROM "st-holdings"`
   );
 
   const decisions: Decision[] = [];
   const trades: Trade[] = [];
 
-  for (const row of rows) {
+  for (const row of holdings) {
+    // 1. Fetch REAL real-time quote
+    const quote = await getQuote(row.symbol);
+    const currentPrice = quote ? quote.price : (parseFloat(row.current_price) || 0);
+    const currency = quote ? quote.currency : (row.price_currency || "USD");
+
+    // 2. Search for REAL market news
     const news = await searchMarketNews(row.symbol);
-    const currentPrice = parseFloat(row.current_price) || 0;
+    
+    // 3. Perform REAL analysis with indicators
     const decision = analyzeSignals(
       row.symbol,
       currentPrice,
       row.cost_price ? parseFloat(row.cost_price) : null,
       parseFloat(row.shares) || 0,
-      news
+      news,
+      quote // Pass the full quote with PE, MarketCap, etc.
     );
 
     // Save decision
@@ -249,18 +295,18 @@ export async function runDecisions(): Promise<{ decisions: Decision[]; trades: T
         decision.confidence,
         decision.reasoning,
         decision.newsSummary,
-        JSON.stringify(decision.marketData),
+        JSON.stringify({ ...decision.marketData, source: "live_market" }),
       ]
     );
 
     decisions.push(decision);
 
-    // Execute simulated trade
+    // 4. Execute REAL-market-based simulated trade
     if (currentPrice > 0) {
       const trade = await executeSimulatedTrade(
         decision,
         currentPrice,
-        row.price_currency || "USD",
+        currency,
         parseFloat(row.shares) || 0
       );
       if (trade) trades.push(trade);

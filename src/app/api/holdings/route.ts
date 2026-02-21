@@ -5,8 +5,8 @@ import { convertToUsd } from "@/lib/prices";
 export async function GET() {
   try {
     const { rows: holdings } = await pool.query(`
-      SELECT symbol, name, shares, cost_price, cost_currency,
-             current_price, price_currency, exchange, updated_at
+      SELECT symbol, name, shares, cost_price,
+             current_price, price_currency, updated_at
       FROM "st-holdings" ORDER BY symbol
     `);
 
@@ -18,7 +18,7 @@ export async function GET() {
 
       // Convert to USD for consistent comparisons
       const marketValueUsd = convertToUsd(currentPrice * shares, h.price_currency || "USD");
-      const costBasisUsd = convertToUsd(costPrice * shares, h.cost_currency || "USD");
+      const costBasisUsd = convertToUsd(costPrice * shares, h.price_currency || "USD");
 
       const pnl = costBasisUsd > 0 && marketValueUsd > 0 ? marketValueUsd - costBasisUsd : null;
       const pnlPct = costBasisUsd > 0 && marketValueUsd > 0 ? ((marketValueUsd - costBasisUsd) / costBasisUsd) * 100 : null;
