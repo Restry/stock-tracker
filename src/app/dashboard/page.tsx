@@ -131,8 +131,8 @@ export default function DashboardPage() {
     <div className="min-h-screen bg-background text-foreground">
       {/* Header */}
       <header className="border-b border-border bg-surface/80 backdrop-blur-xl sticky top-0 z-50">
-        <div className="max-w-[1400px] mx-auto px-6 h-16 flex items-center justify-between">
-          <div className="flex items-center gap-3">
+        <div className="max-w-[1400px] mx-auto px-3 md:px-6 h-14 md:h-16 flex items-center justify-between">
+          <div className="flex items-center gap-2 md:gap-3">
             <div className="w-8 h-8 rounded-lg bg-accent/10 flex items-center justify-center">
               <svg viewBox="0 0 24 24" className="w-4.5 h-4.5 text-accent" fill="none" stroke="currentColor" strokeWidth="2">
                 <path strokeLinecap="round" strokeLinejoin="round" d="M2 20h20M5 20V9l3-3 4 4 4-8 4 6v12" />
@@ -140,13 +140,13 @@ export default function DashboardPage() {
             </div>
             <div>
               <h1 className="text-sm font-bold tracking-tight">Stock Tracker</h1>
-              <p className="text-[10px] text-muted-dark uppercase tracking-widest">Portfolio Intelligence</p>
+              <p className="text-[10px] text-muted-dark uppercase tracking-widest hidden sm:block">Portfolio Intelligence</p>
             </div>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1.5 md:gap-2">
             {lastUpdate && (
-              <span className="text-[11px] text-muted-dark mr-3 font-mono">
+              <span className="text-[11px] text-muted-dark mr-1 md:mr-3 font-mono hidden sm:inline-flex items-center">
                 <span className="inline-block w-1.5 h-1.5 rounded-full bg-profit mr-1.5 pulse-dot" />
                 {lastUpdate.toLocaleTimeString()}
               </span>
@@ -174,9 +174,9 @@ export default function DashboardPage() {
         </div>
       </header>
 
-      <main className="max-w-[1400px] mx-auto px-6 py-6 space-y-6">
+      <main className="max-w-[1400px] mx-auto px-3 md:px-6 py-4 md:py-6 space-y-4 md:space-y-6">
         {/* Portfolio Summary Cards */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+        <div className="grid grid-cols-2 md:grid-cols-2 lg:grid-cols-4 gap-3 md:gap-4">
           <MetricCard
             label="Portfolio Value"
             value={formatCurrency(totalValue)}
@@ -205,14 +205,14 @@ export default function DashboardPage() {
         </div>
 
         {/* Charts Row */}
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-3 md:gap-4">
           {/* Portfolio Value Chart */}
-          <div className="lg:col-span-2 bg-surface border border-border rounded-2xl p-5">
+          <div className="lg:col-span-2 bg-surface border border-border rounded-2xl p-4 md:p-5">
             <div className="flex items-center justify-between mb-4">
               <h2 className="text-sm font-semibold text-muted">Portfolio Performance</h2>
               <span className="text-xs text-muted-dark font-mono">30 Day View</span>
             </div>
-            <div className="h-[220px]">
+            <div className="h-[180px] md:h-[220px]">
               <ResponsiveContainer width="100%" height="100%">
                 <AreaChart data={chartData}>
                   <defs>
@@ -227,6 +227,7 @@ export default function DashboardPage() {
                     tick={{ fill: "#484f58", fontSize: 10 }}
                     axisLine={false}
                     tickLine={false}
+                    interval="preserveStartEnd"
                   />
                   <YAxis
                     stroke="#30363d"
@@ -234,7 +235,8 @@ export default function DashboardPage() {
                     axisLine={false}
                     tickLine={false}
                     tickFormatter={(v) => `$${(v / 1000).toFixed(0)}k`}
-                    width={55}
+                    width={45}
+                    hide={false}
                   />
                   <Tooltip
                     contentStyle={{
@@ -259,7 +261,7 @@ export default function DashboardPage() {
           </div>
 
           {/* Allocation Pie */}
-          <div className="bg-surface border border-border rounded-2xl p-5">
+          <div className="bg-surface border border-border rounded-2xl p-4 md:p-5">
             <h2 className="text-sm font-semibold text-muted mb-4">Allocation</h2>
             {allocationData.length > 0 ? (
               <>
@@ -318,11 +320,13 @@ export default function DashboardPage() {
 
         {/* Holdings Table */}
         <section className="bg-surface border border-border rounded-2xl overflow-hidden">
-          <div className="px-5 py-4 border-b border-border flex items-center justify-between">
+          <div className="px-4 md:px-5 py-3 md:py-4 border-b border-border flex items-center justify-between">
             <h2 className="text-sm font-semibold text-muted">Holdings</h2>
             <span className="text-[11px] text-muted-dark font-mono">{holdings.length} positions</span>
           </div>
-          <div className="overflow-x-auto">
+
+          {/* Desktop table — hidden on mobile */}
+          <div className="hidden md:block overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
                 <tr className="text-muted-dark text-[11px] uppercase tracking-wider border-b border-border">
@@ -390,6 +394,50 @@ export default function DashboardPage() {
               </tbody>
             </table>
           </div>
+
+          {/* Mobile card list — visible only on mobile */}
+          <div className="md:hidden divide-y divide-border/50">
+            {holdings.map((h) => (
+              <div key={h.symbol} className="px-4 py-3 table-row-hover">
+                <div className="flex items-center justify-between mb-2">
+                  <div className="flex items-center gap-2">
+                    <div className="w-7 h-7 rounded-lg bg-accent/10 flex items-center justify-center">
+                      <span className="text-[10px] font-bold text-accent">{h.symbol.substring(0, 2)}</span>
+                    </div>
+                    <div>
+                      <span className="font-mono font-semibold text-accent text-sm">{h.symbol}</span>
+                      <span className="block text-[11px] text-muted truncate max-w-[140px]">{h.name}</span>
+                    </div>
+                  </div>
+                  {h.pnl !== null ? (
+                    <div className={`text-right font-mono ${h.pnl >= 0 ? "text-profit" : "text-loss"}`}>
+                      <span className="text-sm font-medium">{h.pnl >= 0 ? "+" : ""}{formatCurrency(h.pnl)}</span>
+                      <span className="block text-[11px] opacity-75">{h.pnlPct! >= 0 ? "+" : ""}{h.pnlPct!.toFixed(2)}%</span>
+                    </div>
+                  ) : <span className="text-muted-dark text-sm">—</span>}
+                </div>
+                <div className="flex items-center justify-between text-xs text-muted-dark font-mono">
+                  <span>{parseFloat(h.shares).toLocaleString()} shares</span>
+                  <span>
+                    {h.current_price
+                      ? `${parseFloat(h.current_price).toFixed(2)} ${h.price_currency}`
+                      : "—"}
+                  </span>
+                  <span>
+                    {h.marketValue > 0 ? formatCurrency(h.marketValue) : "—"}
+                  </span>
+                </div>
+              </div>
+            ))}
+            {holdings.length === 0 && (
+              <div className="px-4 py-12 text-center text-muted-dark">
+                <div className="flex flex-col items-center gap-2">
+                  <IconDatabase className="w-8 h-8 opacity-30" />
+                  <p>No holdings. Click <strong>&quot;Seed DB&quot;</strong> to initialize.</p>
+                </div>
+              </div>
+            )}
+          </div>
         </section>
 
         {/* AI Decisions & Trades Tabs */}
@@ -424,7 +472,7 @@ export default function DashboardPage() {
             </button>
           </div>
 
-          <div className="p-5">
+          <div className="p-3 md:p-5">
             {activeTab === "decisions" ? (
               <DecisionsList decisions={decisions} />
             ) : (
@@ -436,7 +484,7 @@ export default function DashboardPage() {
 
       {/* Footer */}
       <footer className="border-t border-border mt-8">
-        <div className="max-w-[1400px] mx-auto px-6 py-4 flex items-center justify-between text-xs text-muted-dark">
+        <div className="max-w-[1400px] mx-auto px-3 md:px-6 py-4 flex flex-col sm:flex-row items-center justify-between gap-1 text-xs text-muted-dark">
           <span>Stock Tracker v1.0 — Portfolio Intelligence</span>
           <span className="font-mono">Powered by AI · Real-time Market Data</span>
         </div>
@@ -460,9 +508,9 @@ function DecisionsList({ decisions }: { decisions: Decision[] }) {
   return (
     <div className="space-y-3">
       {decisions.map((d) => (
-        <div key={d.id} className="bg-surface-elevated border border-border rounded-xl p-4 table-row-hover">
-          <div className="flex items-start justify-between mb-2">
-            <div className="flex items-center gap-3">
+        <div key={d.id} className="bg-surface-elevated border border-border rounded-xl p-3 md:p-4 table-row-hover">
+          <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between mb-2 gap-1.5">
+            <div className="flex items-center gap-2 md:gap-3 flex-wrap">
               <span className="font-mono font-bold text-accent text-sm">{d.symbol}</span>
               <ActionBadge action={d.action} />
               <ConfidenceBar confidence={d.confidence} />
@@ -500,46 +548,72 @@ function TradesList({ trades }: { trades: Trade[] }) {
   }
 
   return (
-    <div className="overflow-x-auto">
-      <table className="w-full text-sm">
-        <thead>
-          <tr className="text-muted-dark text-[11px] uppercase tracking-wider border-b border-border">
-            <th className="text-left px-4 py-2.5 font-medium">Time</th>
-            <th className="text-left px-4 py-2.5 font-medium">Symbol</th>
-            <th className="text-left px-4 py-2.5 font-medium">Action</th>
-            <th className="text-right px-4 py-2.5 font-medium">Shares</th>
-            <th className="text-right px-4 py-2.5 font-medium">Price</th>
-            <th className="text-right px-4 py-2.5 font-medium">Value</th>
-            <th className="text-left px-4 py-2.5 font-medium">Source</th>
-          </tr>
-        </thead>
-        <tbody>
-          {trades.map((t) => {
-            const shares = parseFloat(t.shares);
-            const price = parseFloat(t.price);
-            return (
-              <tr key={t.id} className="border-b border-border/40 table-row-hover">
-                <td className="px-4 py-2.5 font-mono text-muted-dark text-xs">{formatTime(t.created_at)}</td>
-                <td className="px-4 py-2.5 font-mono font-semibold text-accent">{t.symbol}</td>
-                <td className="px-4 py-2.5"><ActionBadge action={t.action} /></td>
-                <td className="px-4 py-2.5 text-right font-mono">{shares.toLocaleString()}</td>
-                <td className="px-4 py-2.5 text-right font-mono">
-                  {price.toFixed(2)} <span className="text-muted-dark text-xs">{t.currency}</span>
-                </td>
-                <td className="px-4 py-2.5 text-right font-mono font-medium">
-                  {formatCurrency(shares * price)}
-                </td>
-                <td className="px-4 py-2.5">
-                  <span className="text-[10px] font-mono uppercase tracking-wider text-muted-dark bg-background px-2 py-1 rounded-md">
-                    {t.source}
-                  </span>
-                </td>
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
-    </div>
+    <>
+      {/* Desktop table */}
+      <div className="hidden md:block overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="text-muted-dark text-[11px] uppercase tracking-wider border-b border-border">
+              <th className="text-left px-4 py-2.5 font-medium">Time</th>
+              <th className="text-left px-4 py-2.5 font-medium">Symbol</th>
+              <th className="text-left px-4 py-2.5 font-medium">Action</th>
+              <th className="text-right px-4 py-2.5 font-medium">Shares</th>
+              <th className="text-right px-4 py-2.5 font-medium">Price</th>
+              <th className="text-right px-4 py-2.5 font-medium">Value</th>
+              <th className="text-left px-4 py-2.5 font-medium">Source</th>
+            </tr>
+          </thead>
+          <tbody>
+            {trades.map((t) => {
+              const shares = parseFloat(t.shares);
+              const price = parseFloat(t.price);
+              return (
+                <tr key={t.id} className="border-b border-border/40 table-row-hover">
+                  <td className="px-4 py-2.5 font-mono text-muted-dark text-xs">{formatTime(t.created_at)}</td>
+                  <td className="px-4 py-2.5 font-mono font-semibold text-accent">{t.symbol}</td>
+                  <td className="px-4 py-2.5"><ActionBadge action={t.action} /></td>
+                  <td className="px-4 py-2.5 text-right font-mono">{shares.toLocaleString()}</td>
+                  <td className="px-4 py-2.5 text-right font-mono">
+                    {price.toFixed(2)} <span className="text-muted-dark text-xs">{t.currency}</span>
+                  </td>
+                  <td className="px-4 py-2.5 text-right font-mono font-medium">
+                    {formatCurrency(shares * price)}
+                  </td>
+                  <td className="px-4 py-2.5">
+                    <span className="text-[10px] font-mono uppercase tracking-wider text-muted-dark bg-background px-2 py-1 rounded-md">
+                      {t.source}
+                    </span>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+
+      {/* Mobile card list */}
+      <div className="md:hidden space-y-2">
+        {trades.map((t) => {
+          const shares = parseFloat(t.shares);
+          const price = parseFloat(t.price);
+          return (
+            <div key={t.id} className="bg-surface-elevated border border-border rounded-xl p-3 table-row-hover">
+              <div className="flex items-center justify-between mb-1.5">
+                <div className="flex items-center gap-2">
+                  <span className="font-mono font-semibold text-accent text-sm">{t.symbol}</span>
+                  <ActionBadge action={t.action} />
+                </div>
+                <span className="text-muted-dark text-[11px] font-mono">{formatTime(t.created_at)}</span>
+              </div>
+              <div className="flex items-center justify-between text-xs font-mono text-muted-dark">
+                <span>{shares.toLocaleString()} shares @ {price.toFixed(2)} {t.currency}</span>
+                <span className="text-foreground font-medium">{formatCurrency(shares * price)}</span>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </>
   );
 }
 
@@ -559,26 +633,26 @@ function MetricCard({
   trend?: "up" | "down";
 }) {
   return (
-    <div className={`rounded-2xl p-5 border card-glow ${
+    <div className={`rounded-2xl p-3 md:p-5 border card-glow ${
       accent
         ? "bg-gradient-to-br from-accent/8 to-transparent border-accent/20"
         : "bg-surface border-border"
     }`}>
-      <div className="flex items-start justify-between mb-3">
-        <span className="text-[11px] font-medium text-muted-dark uppercase tracking-wider">{label}</span>
-        <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${
+      <div className="flex items-start justify-between mb-2 md:mb-3">
+        <span className="text-[10px] md:text-[11px] font-medium text-muted-dark uppercase tracking-wider">{label}</span>
+        <div className={`w-7 h-7 md:w-8 md:h-8 rounded-lg flex items-center justify-center ${
           accent ? "bg-accent/15 text-accent" : "bg-surface-elevated text-muted"
         }`}>
           {icon}
         </div>
       </div>
-      <div className={`text-2xl font-bold font-mono tracking-tight ${
+      <div className={`text-lg md:text-2xl font-bold font-mono tracking-tight ${
         trend === "up" ? "text-profit" : trend === "down" ? "text-loss" : accent ? "text-accent" : "text-foreground"
       }`}>
         {value}
       </div>
       {subtitle && (
-        <p className="text-[11px] text-muted-dark mt-1 font-mono">{subtitle}</p>
+        <p className="text-[10px] md:text-[11px] text-muted-dark mt-1 font-mono">{subtitle}</p>
       )}
     </div>
   );
@@ -628,7 +702,7 @@ function HeaderButton({
     <button
       onClick={onClick}
       disabled={loading}
-      className={`inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-medium transition-all duration-200 disabled:opacity-50 active:scale-[0.97] ${
+      className={`inline-flex items-center gap-1.5 px-2 md:px-3.5 py-2 rounded-xl text-xs font-medium transition-all duration-200 disabled:opacity-50 active:scale-[0.97] ${
         variant === "primary"
           ? "bg-accent hover:bg-accent-bright text-background shadow-lg shadow-accent/10"
           : "bg-surface-elevated hover:bg-border-light text-muted border border-border"
@@ -640,7 +714,7 @@ function HeaderButton({
           <path d="M12 2a10 10 0 019.95 9" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
         </svg>
       ) : icon}
-      {label}
+      <span className="hidden sm:inline">{label}</span>
     </button>
   );
 }
