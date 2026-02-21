@@ -52,6 +52,22 @@ export async function POST(req: Request) {
         holdings_snapshot JSONB,
         decisions_summary JSONB,
         created_at TIMESTAMPTZ DEFAULT NOW()
+      )`,
+      `CREATE TABLE IF NOT EXISTS "st-price-history" (
+        id SERIAL PRIMARY KEY,
+        symbol VARCHAR(20) NOT NULL,
+        price NUMERIC NOT NULL,
+        currency VARCHAR(10) DEFAULT 'USD',
+        change NUMERIC,
+        change_percent NUMERIC,
+        previous_close NUMERIC,
+        pe_ratio NUMERIC,
+        market_cap NUMERIC,
+        dividend_yield NUMERIC,
+        fifty_two_week_high NUMERIC,
+        fifty_two_week_low NUMERIC,
+        average_volume NUMERIC,
+        recorded_at TIMESTAMPTZ DEFAULT NOW()
       )`
     ];
 

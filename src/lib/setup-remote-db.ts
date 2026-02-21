@@ -42,6 +42,22 @@ export async function setupDb() {
       pnl_usd NUMERIC,
       summary TEXT,
       created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+    )`,
+    `CREATE TABLE IF NOT EXISTS "st-price-history" (
+      id SERIAL PRIMARY KEY,
+      symbol TEXT NOT NULL,
+      price NUMERIC NOT NULL,
+      currency TEXT DEFAULT 'USD',
+      change NUMERIC,
+      change_percent NUMERIC,
+      previous_close NUMERIC,
+      pe_ratio NUMERIC,
+      market_cap NUMERIC,
+      dividend_yield NUMERIC,
+      fifty_two_week_high NUMERIC,
+      fifty_two_week_low NUMERIC,
+      average_volume NUMERIC,
+      recorded_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
     )`
   ];
 

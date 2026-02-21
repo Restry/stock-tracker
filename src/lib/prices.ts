@@ -314,6 +314,24 @@ export async function updateAllPrices(): Promise<Quote[]> {
         `UPDATE "st-holdings" SET current_price = $1, price_currency = $2, updated_at = NOW() WHERE symbol = $3`,
         [quote.price, quote.currency, quote.symbol]
       );
+      await pool.query(
+        `INSERT INTO "st-price-history" (symbol, price, currency, change, change_percent, previous_close, pe_ratio, market_cap, dividend_yield, fifty_two_week_high, fifty_two_week_low, average_volume)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+        [
+          quote.symbol,
+          quote.price,
+          quote.currency,
+          quote.change ?? null,
+          quote.changePercent ?? null,
+          quote.previousClose ?? null,
+          quote.pe ?? null,
+          quote.marketCap ?? null,
+          quote.dividendYield ?? null,
+          quote.fiftyTwoWeekHigh ?? null,
+          quote.fiftyTwoWeekLow ?? null,
+          quote.averageVolume ?? null,
+        ]
+      );
       results.push(quote);
     }
   }
