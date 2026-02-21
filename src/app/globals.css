@@ -1,26 +1,84 @@
 @import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
-
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
+  --color-background: #06080d;
+  --color-foreground: #e8eaed;
+  --color-surface: #0d1117;
+  --color-surface-elevated: #161b22;
+  --color-border: #21262d;
+  --color-border-light: #30363d;
+  --color-accent: #58a6ff;
+  --color-accent-bright: #79c0ff;
+  --color-profit: #3fb950;
+  --color-profit-bg: rgba(63, 185, 80, 0.12);
+  --color-loss: #f85149;
+  --color-loss-bg: rgba(248, 81, 73, 0.12);
+  --color-hold: #d29922;
+  --color-hold-bg: rgba(210, 153, 34, 0.12);
+  --color-muted: #8b949e;
+  --color-muted-dark: #484f58;
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-border-light) transparent;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: var(--color-background);
+  color: var(--color-foreground);
+  font-family: var(--font-sans), system-ui, -apple-system, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Glow effect for cards */
+.card-glow {
+  position: relative;
+}
+.card-glow::before {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  border-radius: inherit;
+  background: linear-gradient(135deg, rgba(88, 166, 255, 0.08), transparent 50%);
+  pointer-events: none;
+  z-index: 0;
+}
+
+/* Animated gradient border */
+@keyframes gradient-shift {
+  0% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+
+.gradient-border {
+  background: linear-gradient(135deg, var(--color-accent), #a855f7, var(--color-accent));
+  background-size: 200% 200%;
+  animation: gradient-shift 4s ease-in-out infinite;
+}
+
+/* Pulse dot animation */
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+.pulse-dot {
+  animation: pulse-dot 2s ease-in-out infinite;
+}
+
+/* Table row hover */
+.table-row-hover {
+  transition: background-color 0.15s ease;
+}
+.table-row-hover:hover {
+  background-color: rgba(88, 166, 255, 0.04);
+}
+
+/* Custom selection color */
+::selection {
+  background-color: rgba(88, 166, 255, 0.3);
 }

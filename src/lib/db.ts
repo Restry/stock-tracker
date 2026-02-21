@@ -2,7 +2,7 @@ import { Pool } from "pg";
 
 const pool = new Pool({
   connectionString:
-    "postgresql://jarvis:9YMjTVB9EQYTRXzjSwHZP2k@52.175.79.6:25432/dashboard?connect_timeout=10&sslmode=prefer",
+    "postgresql://jarvis:9YMjTVB9EQYTRXzjSwHZP2k@52.175.79.6:25432/dashboard?connect_timeout=10&sslmode=disable",
 });
 
 export default pool;

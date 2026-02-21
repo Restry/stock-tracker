@@ -3,8 +3,8 @@ import { runDecisions } from "@/lib/ai-decision";
 
 export async function POST() {
   try {
-    const decisions = await runDecisions();
-    return NextResponse.json({ decisions });
+    const result = await runDecisions();
+    return NextResponse.json(result);
   } catch (error) {
     return NextResponse.json({ error: String(error) }, { status: 500 });
   }
