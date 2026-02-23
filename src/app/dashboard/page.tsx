@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
+import Link from "next/link";
 import {
   AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer,
   PieChart, Pie, Cell,
@@ -145,6 +146,11 @@ export default function DashboardPage() {
           </div>
 
           <div className="flex items-center gap-1.5 md:gap-2">
+            <nav className="hidden md:flex items-center gap-1 mr-2 border-r border-border pr-3">
+              <Link href="/dashboard" className="px-3 py-1.5 rounded-lg text-xs font-medium bg-accent/10 text-accent">Dashboard</Link>
+              <Link href="/dashboard/history" className="px-3 py-1.5 rounded-lg text-xs font-medium text-muted-dark hover:text-muted hover:bg-surface-elevated transition-colors">History</Link>
+              <Link href="/dashboard/logs" className="px-3 py-1.5 rounded-lg text-xs font-medium text-muted-dark hover:text-muted hover:bg-surface-elevated transition-colors">Logs</Link>
+            </nav>
             {lastUpdate && (
               <span className="text-[11px] text-muted-dark mr-1 md:mr-3 font-mono hidden sm:inline-flex items-center">
                 <span className="inline-block w-1.5 h-1.5 rounded-full bg-profit mr-1.5 pulse-dot" />

@@ -303,6 +303,17 @@ export async function getQuote(symbol: string): Promise<Quote | null> {
   return await fetchQuote(symbol);
 }
 
+function escapeSqlString(str: string): string {
+  return str.replace(/'/g, "''");
+}
+
+function toSqlVal(val: any): string {
+  if (val === null || val === undefined) return 'NULL';
+  if (typeof val === 'number') return isFinite(val) ? val.toString() : 'NULL';
+  if (typeof val === 'string') return `'${escapeSqlString(val)}'`;
+  return 'NULL';
+}
+
 export async function updateAllPrices(): Promise<Quote[]> {
   const { rows } = await pool.query(`SELECT symbol FROM "st-holdings"`);
   const results: Quote[] = [];
@@ -310,28 +321,14 @@ export async function updateAllPrices(): Promise<Quote[]> {
   for (const row of rows) {
     const quote = await fetchQuote(row.symbol);
     if (quote) {
-      await pool.query(
-        `UPDATE "st-holdings" SET current_price = $1, price_currency = $2, updated_at = NOW() WHERE symbol = $3`,
-        [quote.price, quote.currency, quote.symbol]
-      );
-      await pool.query(
-        `INSERT INTO "st-price-history" (symbol, price, currency, change, change_percent, previous_close, pe_ratio, market_cap, dividend_yield, fifty_two_week_high, fifty_two_week_low, average_volume)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
-        [
-          quote.symbol,
-          quote.price,
-          quote.currency,
-          quote.change ?? null,
-          quote.changePercent ?? null,
-          quote.previousClose ?? null,
-          quote.pe ?? null,
-          quote.marketCap ?? null,
-          quote.dividendYield ?? null,
-          quote.fiftyTwoWeekHigh ?? null,
-          quote.fiftyTwoWeekLow ?? null,
-          quote.averageVolume ?? null,
-        ]
-      );
+      // Direct SQL construction to bypass parameter binding issues in the custom DB gateway
+      const updateSql = `UPDATE "st-holdings" SET current_price = ${toSqlVal(quote.price)}, price_currency = ${toSqlVal(quote.currency)}, updated_at = NOW() WHERE symbol = ${toSqlVal(row.symbol)}`;
+      await pool.query(updateSql);
+
+      const historySql = `INSERT INTO "st-price-history" (symbol, price, currency, change, change_percent, previous_close, pe_ratio, market_cap, dividend_yield, fifty_two_week_high, fifty_two_week_low, average_volume)
+         VALUES (${toSqlVal(quote.symbol)}, ${toSqlVal(quote.price)}, ${toSqlVal(quote.currency)}, ${toSqlVal(quote.change)}, ${toSqlVal(quote.changePercent)}, ${toSqlVal(quote.previousClose)}, ${toSqlVal(quote.pe)}, ${toSqlVal(quote.marketCap)}, ${toSqlVal(quote.dividendYield)}, ${toSqlVal(quote.fiftyTwoWeekHigh)}, ${toSqlVal(quote.fiftyTwoWeekLow)}, ${toSqlVal(quote.averageVolume)})`;
+      await pool.query(historySql);
+      
       results.push(quote);
     }
   }

@@ -12,6 +12,10 @@ export const DB_CONFIG = {
  */
 async function dbQuery(sql: string, params: any[] = []) {
   console.log('Executing DB Admin Query (SQL):', sql.substring(0, 100));
+  // Convert $1, $2 to ? for the backend if it's using a different driver
+  // OR Ensure the backend actually supports $n parameters. 
+  // Given the error 42P02, the backend IS receiving the query but thinks $3 is missing.
+  
   const res = await fetch(`${DB_CONFIG.url}/pg/query`, {
     method: 'POST',
     headers: {
@@ -24,13 +28,13 @@ async function dbQuery(sql: string, params: any[] = []) {
   
   if (!res.ok) {
     const text = await res.text();
-    console.error('DB HTTP Error:', res.status, text);
+    console.error('DB HTTP Error:', res.status, text, 'SQL:', sql, 'Params:', params);
     throw new Error(`DB HTTP ${res.status}: ${text}`);
   }
   
   const data = await res.json();
   if (data.error) {
-    console.error('DB Response Error:', data.error);
+    console.error('DB Response Error:', data.error, 'SQL:', sql, 'Params:', params);
     throw new Error(`DB Result Error: ${data.error}`);
   }
   return data;

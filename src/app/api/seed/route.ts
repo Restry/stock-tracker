@@ -67,7 +67,7 @@ export async function POST(req: Request) {
         fifty_two_week_high NUMERIC,
         fifty_two_week_low NUMERIC,
         average_volume NUMERIC,
-        recorded_at TIMESTAMPTZ DEFAULT NOW()
+        created_at TIMESTAMPTZ DEFAULT NOW()
       )`
     ];
 

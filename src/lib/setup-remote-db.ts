@@ -57,7 +57,7 @@ export async function setupDb() {
       fifty_two_week_high NUMERIC,
       fifty_two_week_low NUMERIC,
       average_volume NUMERIC,
-      recorded_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+      created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
     )`
   ];
 

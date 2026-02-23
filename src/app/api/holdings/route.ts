@@ -11,7 +11,7 @@ export async function GET() {
     `);
 
     let totalValueUsd = 0;
-    const enriched = holdings.map((h) => {
+    const enriched = holdings.map((h: any) => {
       const shares = parseFloat(h.shares) || 0;
       const currentPrice = parseFloat(h.current_price) || 0;
       const costPrice = parseFloat(h.cost_price) || 0;
