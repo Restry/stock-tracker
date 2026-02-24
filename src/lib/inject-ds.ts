@@ -1,4 +1,4 @@
-import pool from "./db";
+import pool, { toSqlVal } from "./db";
 
 async function injectDeepSeekDecisions() {
   const decisions = [
@@ -20,8 +20,7 @@ async function injectDeepSeekDecisions() {
 
   for (const d of decisions) {
     await pool.query(
-      `INSERT INTO "st01-decisions" (symbol, action, confidence, reasoning, news_summary, market_data) VALUES ($1, $2, $3, $4, $5, $6)`,
-      [d.symbol, d.action, d.confidence, d.reasoning, d.news_summary, JSON.stringify({ source: "deepseek-v3.2" })]
+      `INSERT INTO "st-decisions" (symbol, action, confidence, reasoning, news_summary, market_data) VALUES (${toSqlVal(d.symbol)}, ${toSqlVal(d.action)}, ${toSqlVal(d.confidence)}, ${toSqlVal(d.reasoning)}, ${toSqlVal(d.news_summary)}, ${toSqlVal(JSON.stringify({ source: "deepseek-v3.2" }))})`
     );
   }
   process.exit(0);

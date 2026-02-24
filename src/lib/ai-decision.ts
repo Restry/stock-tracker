@@ -1,5 +1,5 @@
-import pool from "./db";
-import { getQuote, convertToUsd, toSqlVal } from "./prices";
+import pool, { logAction, toSqlVal } from "./db";
+import { getQuote, convertToUsd } from "./prices";
 
 export interface Decision {
   symbol: string;
@@ -25,12 +25,16 @@ const SYMBOL_NAMES: Record<string, string> = {
   "01810.HK": "Xiaomi",
 };
 
-// Search market news via Tavily
+// Search market news via Tavily deep search
 async function searchMarketNews(symbol: string): Promise<string> {
   const apiKey = process.env.TAVILY_API_KEY;
-  if (!apiKey) return "No Tavily API key configured. Using technical signals only.";
+  if (!apiKey) {
+    await logAction("tavily", `Skipping news search for ${symbol}: no API key configured`);
+    return "No Tavily API key configured. Using technical signals only.";
+  }
 
   const companyName = SYMBOL_NAMES[symbol] || symbol;
+  const currentYear = new Date().getFullYear();
 
   try {
     const res = await fetch("https://api.tavily.com/search", {
@@ -38,13 +42,25 @@ async function searchMarketNews(symbol: string): Promise<string> {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         api_key: apiKey,
-        query: `${companyName} ${symbol} stock market news latest financial analysis 2024 2025`,
+        query: `${companyName} ${symbol} stock market news latest financial analysis ${currentYear}`,
         search_depth: "advanced",
         max_results: 8,
       }),
-      signal: AbortSignal.timeout(20000),
+      signal: AbortSignal.timeout(25000),
     });
-    if (!res.ok) return "Tavily search failed. Using technical signals only.";
+
+    if (!res.ok) {
+      const statusText = `${res.status} ${res.statusText}`;
+      if (res.status === 401 || res.status === 403) {
+        await logAction("tavily", `Auth error for ${symbol}: ${statusText}`);
+      } else if (res.status === 429) {
+        await logAction("tavily", `Rate limited for ${symbol}: ${statusText}`);
+      } else {
+        await logAction("tavily", `Search failed for ${symbol}: ${statusText}`);
+      }
+      return `Tavily search failed (${res.status}). Using technical signals only.`;
+    }
+
     const data = await res.json();
     const summaries = (data.results || [])
       .map((r: { title: string; content: string; url: string }) =>
@@ -52,7 +68,10 @@ async function searchMarketNews(symbol: string): Promise<string> {
       )
       .join("\n");
     return summaries || "No relevant news found.";
-  } catch {
+  } catch (err) {
+    const isTimeout = err instanceof DOMException && err.name === "TimeoutError";
+    const errMsg = isTimeout ? "Request timed out" : String(err);
+    await logAction("tavily", `Search error for ${symbol}: ${errMsg}`);
     return "Tavily search error. Using technical signals only.";
   }
 }
@@ -263,11 +282,16 @@ async function executeSimulatedTrade(
     const sellSql = `UPDATE "st-holdings" SET shares = GREATEST(0, shares - ${toSqlVal(tradeShares)}) WHERE symbol = ${toSqlVal(decision.symbol)}`;
     await pool.query(sellSql);
   }
+  
+  // Log trade execution
+  await logAction("trade", `Executed ${trade.action} for ${trade.symbol}`, trade);
 
   return trade;
 }
 
 export async function runDecisions(): Promise<{ decisions: Decision[]; trades: Trade[] }> {
+  await logAction("ai", "Starting daily AI decision cycle");
+  
   // First, ensure prices are fresh
   const { rows: holdings } = await pool.query(
     `SELECT symbol, current_price, cost_price, shares, price_currency FROM "st-holdings"`
@@ -306,6 +330,9 @@ export async function runDecisions(): Promise<{ decisions: Decision[]; trades: T
         ${toSqlVal(JSON.stringify({ ...decision.marketData, source: "live_market" }))}
       )`;
     await pool.query(decisionSql);
+    
+    // Log decision
+    await logAction("decision", `Generated ${decision.action} signal for ${row.symbol}`, { confidence: decision.confidence });
 
     decisions.push(decision);
 
@@ -321,5 +348,6 @@ export async function runDecisions(): Promise<{ decisions: Decision[]; trades: T
     }
   }
 
+  await logAction("ai", `Decision cycle complete. Generated ${decisions.length} decisions and ${trades.length} trades.`);
   return { decisions, trades };
 }

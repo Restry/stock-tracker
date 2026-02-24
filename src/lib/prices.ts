@@ -1,4 +1,4 @@
-import pool from "./db";
+import pool, { toSqlVal, logAction } from "./db";
 
 export interface Quote {
   symbol: string;
@@ -245,7 +245,7 @@ async function fetchTavilyQuote(symbol: string): Promise<Quote | null> {
     const pythonPath = "C:\\Users\\micha\\.openclaw\\workspace\\skills\\tavily-search\\scripts\\tavily_search.py";
     const query = `current stock price of ${symbol} in its local currency`;
     const output = execSync(`python "${pythonPath}" --query "${query}"`, {
-      timeout: 20000,
+      timeout: 25000,
     }).toString();
     const data = JSON.parse(output);
     const text = data.answer || data.results?.[0]?.content || "";
@@ -258,9 +258,11 @@ async function fetchTavilyQuote(symbol: string): Promise<Quote | null> {
         currency: inferCurrency(symbol),
       };
     }
-    console.log(`Tavily: could not parse price from response for ${symbol}`);
-  } catch (err) {
-    console.log(`Tavily fallback failed for ${symbol}:`, err);
+    await logAction("tavily", `Could not parse price from Tavily response for ${symbol}`);
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    const isTimeout = msg.includes("ETIMEDOUT") || msg.includes("timed out");
+    await logAction("tavily", `Price fallback ${isTimeout ? "timed out" : "failed"} for ${symbol}: ${msg.substring(0, 200)}`);
   }
   return null;
 }
@@ -303,25 +305,15 @@ export async function getQuote(symbol: string): Promise<Quote | null> {
   return await fetchQuote(symbol);
 }
 
-function escapeSqlString(str: string): string {
-  return str.replace(/'/g, "''");
-}
-
-export function toSqlVal(val: any): string {
-  if (val === null || val === undefined) return 'NULL';
-  if (typeof val === 'number') return isFinite(val) ? val.toString() : 'NULL';
-  if (typeof val === 'string') return `'${escapeSqlString(val)}'`;
-  return 'NULL';
-}
-
 export async function updateAllPrices(): Promise<Quote[]> {
+  await logAction("sync", "Starting price update for all holdings");
   const { rows } = await pool.query(`SELECT symbol FROM "st-holdings"`);
   const results: Quote[] = [];
 
   for (const row of rows) {
     const quote = await fetchQuote(row.symbol);
     if (quote) {
-      // Direct SQL construction to bypass parameter binding issues in the custom DB gateway
+      // Direct SQL construction with safe values
       const updateSql = `UPDATE "st-holdings" SET current_price = ${toSqlVal(quote.price)}, price_currency = ${toSqlVal(quote.currency)}, updated_at = NOW() WHERE symbol = ${toSqlVal(row.symbol)}`;
       await pool.query(updateSql);
 
@@ -330,8 +322,11 @@ export async function updateAllPrices(): Promise<Quote[]> {
       await pool.query(historySql);
       
       results.push(quote);
+    } else {
+      await logAction("sync", `Failed to fetch quote for ${row.symbol}`);
     }
   }
 
+  await logAction("sync", `Price update complete. Updated ${results.length} symbols.`);
   return results;
 }

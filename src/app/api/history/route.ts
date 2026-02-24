@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import pool from "@/lib/db";
+import pool, { toSqlVal } from "@/lib/db";
 
 export async function GET(req: NextRequest) {
   try {
@@ -7,7 +7,6 @@ export async function GET(req: NextRequest) {
     const limit = Math.min(parseInt(req.nextUrl.searchParams.get("limit") || "500"), 1000);
 
     let query: string;
-    let params: any[];
 
     if (symbol) {
       query = `
@@ -16,11 +15,10 @@ export async function GET(req: NextRequest) {
                fifty_two_week_high, fifty_two_week_low, average_volume,
                created_at
         FROM "st-price-history"
-        WHERE symbol = $1
+        WHERE symbol = ${toSqlVal(symbol)}
         ORDER BY created_at DESC
-        LIMIT $2
+        LIMIT ${toSqlVal(limit)}
       `;
-      params = [symbol, limit];
     } else {
       query = `
         SELECT id, symbol, price, currency, change, change_percent,
@@ -29,12 +27,11 @@ export async function GET(req: NextRequest) {
                created_at
         FROM "st-price-history"
         ORDER BY created_at DESC
-        LIMIT $1
+        LIMIT ${toSqlVal(limit)}
       `;
-      params = [limit];
     }
 
-    const { rows } = await pool.query(query, params);
+    const { rows } = await pool.query(query);
 
     // Get distinct symbols for filter dropdown
     const { rows: symbols } = await pool.query(

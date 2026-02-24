@@ -1,6 +1,5 @@
 import { NextResponse } from "next/server";
-import pool from "@/lib/db";
-import { toSqlVal } from "@/lib/prices";
+import pool, { toSqlVal } from "@/lib/db";
 
 export async function POST() {
   try {

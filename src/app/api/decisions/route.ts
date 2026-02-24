@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { runDecisions } from "@/lib/ai-decision";
+import pool from "@/lib/db";
 
 export async function POST() {
   try {
@@ -12,7 +13,7 @@ export async function POST() {
 
 export async function GET() {
   try {
-    const { default: pool } = await import("@/lib/db");
+    // 42P02 fix: Use raw SQL string instead of relying on parameterized query for this simple fetch
     const { rows } = await pool.query(
       `SELECT * FROM "st-decisions" ORDER BY created_at DESC LIMIT 20`
     );
