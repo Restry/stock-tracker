@@ -307,7 +307,7 @@ function escapeSqlString(str: string): string {
   return str.replace(/'/g, "''");
 }
 
-function toSqlVal(val: any): string {
+export function toSqlVal(val: any): string {
   if (val === null || val === undefined) return 'NULL';
   if (typeof val === 'number') return isFinite(val) ? val.toString() : 'NULL';
   if (typeof val === 'string') return `'${escapeSqlString(val)}'`;

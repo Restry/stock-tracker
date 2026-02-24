@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import pool from "@/lib/db";
+import { toSqlVal } from "@/lib/prices";
 
 export async function POST() {
   try {
@@ -8,7 +9,7 @@ export async function POST() {
     );
 
     let totalValue = 0;
-    const snapshot = holdings.map((h) => {
+    const snapshot = (holdings as any[]).map((h: any) => {
       const mv = (parseFloat(h.current_price) || 0) * parseFloat(h.shares);
       totalValue += mv;
       return { ...h, marketValue: mv };
@@ -18,10 +19,13 @@ export async function POST() {
       `SELECT symbol, action, confidence, reasoning FROM "st-decisions" WHERE created_at > NOW() - INTERVAL '1 day'`
     );
 
-    await pool.query(
-      `INSERT INTO "st-daily-reports" (total_value, holdings_snapshot, decisions_summary) VALUES ($1, $2, $3)`,
-      [totalValue, JSON.stringify(snapshot), JSON.stringify(recentDecisions)]
-    );
+    const reportSql = `INSERT INTO "st-daily-reports" (total_value, holdings_snapshot, decisions_summary) 
+      VALUES (
+        ${toSqlVal(totalValue)}, 
+        ${toSqlVal(JSON.stringify(snapshot))}, 
+        ${toSqlVal(JSON.stringify(recentDecisions))}
+      )`;
+    await pool.query(reportSql);
 
     return NextResponse.json({ totalValue, holdings: snapshot.length, decisions: recentDecisions.length });
   } catch (error) {

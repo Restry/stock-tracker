@@ -1,5 +1,5 @@
 import pool from "./db";
-import { getQuote, convertToUsd } from "./prices";
+import { getQuote, convertToUsd, toSqlVal } from "./prices";
 
 export interface Decision {
   symbol: string;
@@ -237,22 +237,25 @@ async function executeSimulatedTrade(
   };
 
   // Record the trade
-  await pool.query(
-    `INSERT INTO "st-trades" (symbol, action, shares, price, currency, reason, source) VALUES ($1, $2, $3, $4, $5, $6, 'ai')`,
-    [trade.symbol, trade.action, trade.shares, trade.price, trade.currency, trade.reason]
-  );
+  const tradeSql = `INSERT INTO "st-trades" (symbol, action, shares, price, currency, reason, source) 
+    VALUES (
+      ${toSqlVal(trade.symbol)}, 
+      ${toSqlVal(trade.action)}, 
+      ${toSqlVal(trade.shares)}, 
+      ${toSqlVal(trade.price)}, 
+      ${toSqlVal(trade.currency)}, 
+      ${toSqlVal(trade.reason)}, 
+      'ai'
+    )`;
+  await pool.query(tradeSql);
 
   // Update holdings
   if (decision.action === "BUY") {
-    await pool.query(
-      `UPDATE "st-holdings" SET shares = shares + $1 WHERE symbol = $2`,
-      [tradeShares, decision.symbol]
-    );
+    const buySql = `UPDATE "st-holdings" SET shares = shares + ${toSqlVal(tradeShares)} WHERE symbol = ${toSqlVal(decision.symbol)}`;
+    await pool.query(buySql);
   } else if (decision.action === "SELL") {
-    await pool.query(
-      `UPDATE "st-holdings" SET shares = GREATEST(0, shares - $1) WHERE symbol = $2`,
-      [tradeShares, decision.symbol]
-    );
+    const sellSql = `UPDATE "st-holdings" SET shares = GREATEST(0, shares - ${toSqlVal(tradeShares)}) WHERE symbol = ${toSqlVal(decision.symbol)}`;
+    await pool.query(sellSql);
   }
 
   return trade;
@@ -287,17 +290,16 @@ export async function runDecisions(): Promise<{ decisions: Decision[]; trades: T
     );
 
     // Save decision
-    await pool.query(
-      `INSERT INTO "st-decisions" (symbol, action, confidence, reasoning, news_summary, market_data) VALUES ($1, $2, $3, $4, $5, $6)`,
-      [
-        decision.symbol,
-        decision.action,
-        decision.confidence,
-        decision.reasoning,
-        decision.newsSummary,
-        JSON.stringify({ ...decision.marketData, source: "live_market" }),
-      ]
-    );
+    const decisionSql = `INSERT INTO "st-decisions" (symbol, action, confidence, reasoning, news_summary, market_data) 
+      VALUES (
+        ${toSqlVal(decision.symbol)}, 
+        ${toSqlVal(decision.action)}, 
+        ${toSqlVal(decision.confidence)}, 
+        ${toSqlVal(decision.reasoning)}, 
+        ${toSqlVal(decision.newsSummary)}, 
+        ${toSqlVal(JSON.stringify({ ...decision.marketData, source: "live_market" }))}
+      )`;
+    await pool.query(decisionSql);
 
     decisions.push(decision);
 
