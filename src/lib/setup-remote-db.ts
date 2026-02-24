@@ -66,7 +66,7 @@ export async function setupDb() {
       await pool.query(sql);
       console.log("Executed:", sql.substring(0, 50) + "...");
     } catch (err) {
-      console.error("Error executing SQL:", err.message);
+      console.error("Error executing SQL:", (err as Error).message);
     }
   }
 
