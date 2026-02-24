@@ -157,7 +157,13 @@ function analyzeSignals(
     } else {
       action = signalStrength < -25 ? "SELL" : "HOLD";
       confidence = 60;
-      reasons.unshift(action === "SELL" ? "MSFT 卖出信号：基本面或技术面显著恶化。" : "MSFT 观察中：非季度末不执行自动买入。");
+      if (action === "SELL") {
+        reasons.unshift("MSFT 卖出信号：基本面或技术面显著恶化。");
+      } else if (signalStrength > 15) {
+        reasons.unshift("MSFT 建议增持：技术形态或市场情绪积极。");
+      } else {
+        reasons.unshift("MSFT 中性观察。");
+      }
     }
   } else {
     // Xiaomi regular rules
