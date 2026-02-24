@@ -241,13 +241,33 @@ async function fetchGoogleFinanceQuote(symbol: string): Promise<Quote | null> {
 // Fallback: Tavily AI Search
 async function fetchTavilyQuote(symbol: string): Promise<Quote | null> {
   try {
-    const { execSync } = require('child_process');
-    const pythonPath = "C:\\Users\\micha\\.openclaw\\workspace\\skills\\tavily-search\\scripts\\tavily_search.py";
-    const query = `current stock price of ${symbol} in its local currency`;
-    const output = execSync(`python "${pythonPath}" --query "${query}"`, {
-      timeout: 25000,
-    }).toString();
-    const data = JSON.parse(output);
+    const apiKey = process.env.TAVILY_API_KEY;
+    if (!apiKey) {
+      await logAction("tavily", `Skipping Tavily price fallback for ${symbol}: no API key configured`);
+      return null;
+    }
+
+    const companyMap: Record<string, string> = {
+      "01810.HK": "Xiaomi",
+      MSFT: "Microsoft",
+    };
+    const query = `latest stock price of ${companyMap[symbol] || symbol} (${symbol}) in local currency`;
+    const res = await fetch("https://api.tavily.com/search", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        api_key: apiKey,
+        query,
+        search_depth: "basic",
+        max_results: 5,
+      }),
+      signal: AbortSignal.timeout(25000),
+    });
+    if (!res.ok) {
+      await logAction("tavily", `Price fallback failed for ${symbol}: ${res.status} ${res.statusText}`);
+      return null;
+    }
+    const data = await res.json();
     const text = data.answer || data.results?.[0]?.content || "";
 
     const price = parsePriceFromText(text);

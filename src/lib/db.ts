@@ -22,6 +22,19 @@ export function toSqlVal(val: any): string {
   return 'NULL';
 }
 
+let logsTableReady = false;
+async function ensureLogsTable(): Promise<void> {
+  if (logsTableReady) return;
+  await dbQuery(`CREATE TABLE IF NOT EXISTS "st-logs" (
+    id SERIAL PRIMARY KEY,
+    category VARCHAR(50) NOT NULL,
+    message TEXT NOT NULL,
+    details JSONB,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+  )`, 0);
+  logsTableReady = true;
+}
+
 /**
  * Server-side ONLY: SQL Query using Service Role.
  * Includes timeout and single retry for transient Supabase errors.
@@ -75,6 +88,7 @@ async function dbQuery(sql: string, retries = 1): Promise<any> {
 export async function logAction(category: string, message: string, details?: any) {
   console.log(`[${category}] ${message}`);
   try {
+    await ensureLogsTable();
     const sql = `INSERT INTO "st-logs" (category, message, details) VALUES (${toSqlVal(category)}, ${toSqlVal(message)}, ${toSqlVal(details)})`;
     await dbQuery(sql);
   } catch (err) {

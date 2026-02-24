@@ -95,6 +95,7 @@ export default function HistoryPage() {
             <NavLink href="/dashboard" label="Dashboard" />
             <NavLink href="/dashboard/history" label="History" active />
             <NavLink href="/dashboard/logs" label="Logs" />
+            <NavLink href="/dashboard/settings" label="Settings" />
           </nav>
         </div>
       </header>

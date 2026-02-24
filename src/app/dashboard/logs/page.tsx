@@ -65,6 +65,7 @@ export default function LogsPage() {
             <NavLink href="/dashboard" label="Dashboard" />
             <NavLink href="/dashboard/history" label="History" />
             <NavLink href="/dashboard/logs" label="Logs" active />
+            <NavLink href="/dashboard/settings" label="Settings" />
           </nav>
         </div>
       </header>

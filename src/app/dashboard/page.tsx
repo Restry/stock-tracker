@@ -46,6 +46,15 @@ interface Trade {
   created_at: string;
 }
 
+interface HealthStatus {
+  alive: boolean;
+  trading: boolean;
+  marketOpen: boolean;
+  pricesFresh: boolean;
+  schedulerAlive: boolean;
+  latestPriceAt: string | null;
+}
+
 const PIE_COLORS = ["#58a6ff", "#a855f7", "#3fb950", "#d29922", "#f85149", "#79c0ff"];
 
 export default function DashboardPage() {
@@ -57,6 +66,25 @@ export default function DashboardPage() {
   const [actionLoading, setActionLoading] = useState("");
   const [activeTab, setActiveTab] = useState<"decisions" | "trades">("decisions");
   const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
+  const [health, setHealth] = useState<HealthStatus | null>(null);
+
+  const fetchHealth = useCallback(async () => {
+    try {
+      const res = await fetch("/api/health");
+      if (!res.ok) return;
+      const data = await res.json();
+      setHealth({
+        alive: Boolean(data.alive),
+        trading: Boolean(data.trading),
+        marketOpen: Boolean(data.marketOpen),
+        pricesFresh: Boolean(data.pricesFresh),
+        schedulerAlive: Boolean(data.schedulerAlive),
+        latestPriceAt: (data.latestPriceAt as string | null) || null,
+      });
+    } catch (err) {
+      console.error("Failed to fetch health:", err);
+    }
+  }, []);
 
   const fetchData = useCallback(async () => {
     try {
@@ -78,16 +106,24 @@ export default function DashboardPage() {
         const tData = await tRes.json();
         setTrades(tData.trades || []);
       }
+      await fetchHealth();
       setLastUpdate(new Date());
     } catch (err) {
       console.error("Failed to fetch data:", err);
     }
     setLoading(false);
-  }, []);
+  }, [fetchHealth]);
 
   useEffect(() => {
     fetchData();
   }, [fetchData]);
+
+  useEffect(() => {
+    const timer = setInterval(() => {
+      fetchHealth();
+    }, 30000);
+    return () => clearInterval(timer);
+  }, [fetchHealth]);
 
   async function handleAction(action: string) {
     setActionLoading(action);
@@ -150,6 +186,7 @@ export default function DashboardPage() {
               <Link href="/dashboard" className="px-3 py-1.5 rounded-lg text-xs font-medium bg-accent/10 text-accent">Dashboard</Link>
               <Link href="/dashboard/history" className="px-3 py-1.5 rounded-lg text-xs font-medium text-muted-dark hover:text-muted hover:bg-surface-elevated transition-colors">History</Link>
               <Link href="/dashboard/logs" className="px-3 py-1.5 rounded-lg text-xs font-medium text-muted-dark hover:text-muted hover:bg-surface-elevated transition-colors">Logs</Link>
+              <Link href="/dashboard/settings" className="px-3 py-1.5 rounded-lg text-xs font-medium text-muted-dark hover:text-muted hover:bg-surface-elevated transition-colors">Settings</Link>
             </nav>
             {lastUpdate && (
               <span className="text-[11px] text-muted-dark mr-1 md:mr-3 font-mono hidden sm:inline-flex items-center">
@@ -157,6 +194,7 @@ export default function DashboardPage() {
                 {lastUpdate.toLocaleTimeString()}
               </span>
             )}
+            <SystemLiveBadge health={health} />
             <HeaderButton
               label="Seed DB"
               loading={actionLoading === "seed"}
@@ -542,6 +580,33 @@ function HeaderButton({ label, loading, onClick, variant, icon }: any) {
       {loading ? <span className="animate-spin text-lg">◌</span> : icon}
       <span className="hidden sm:inline">{label}</span>
     </button>
+  );
+}
+
+function SystemLiveBadge({ health }: { health: HealthStatus | null }) {
+  const live = health?.alive ?? false;
+  const marketOpen = health?.marketOpen ?? false;
+  const pricesFresh = health?.pricesFresh ?? false;
+  const schedulerAlive = health?.schedulerAlive ?? false;
+  const trading = health?.trading ?? false;
+  const dotClass = live && schedulerAlive ? "bg-profit" : "bg-hold";
+  const ringClass = live && schedulerAlive ? "bg-profit/50" : "bg-hold/50";
+  const textClass = live && schedulerAlive ? "text-profit border-profit/30" : "text-hold border-hold/40";
+
+  return (
+    <div className={`hidden lg:inline-flex items-center gap-2 px-2.5 py-1 rounded-full border text-[10px] font-mono mr-1 ${textClass}`}>
+      <span className="relative inline-flex h-2.5 w-2.5">
+        <span className={`absolute inline-flex h-full w-full rounded-full ${ringClass} animate-ping`} />
+        <span className={`relative inline-flex h-2.5 w-2.5 rounded-full ${dotClass}`} />
+      </span>
+      <span>{live ? "LIVE" : "OFFLINE"}</span>
+      <span className="text-muted-dark">·</span>
+      <span>{marketOpen ? "MARKET OPEN" : "MARKET CLOSED"}</span>
+      <span className="text-muted-dark">·</span>
+      <span>{trading ? "TRADING" : "WATCHING"}</span>
+      <span className="text-muted-dark">·</span>
+      <span>{pricesFresh ? "PRICE FRESH" : "PRICE STALE"}</span>
+    </div>
   );
 }
 

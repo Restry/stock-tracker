@@ -1,40 +1,43 @@
-const fs = require('fs');
-const path = require('path');
-const { execSync } = require('child_process');
-
-function getSystemStats() {
-  try {
-    // Windows PowerShell Equivalents for Disk, Memory, and Load
-    const diskOutput = execSync(`powershell -Command "$drive = Get-PSDrive C; [Math]::Round(($drive.Used / ($drive.Used + $drive.Free)) * 100, 2)"`).toString().trim();
-    const memOutput = execSync(`powershell -Command "$os = Get-WmiObject Win32_OperatingSystem; $used = [Math]::Round(($os.TotalVisibleMemorySize - $os.FreePhysicalMemory) / 1024, 0); $total = [Math]::Round($os.TotalVisibleMemorySize / 1024, 0); Write-Output \\"$used/$total MB\\""`).toString().trim();
-    const loadOutput = execSync(`powershell -Command "(Get-WmiObject Win32_Processor | Measure-Object -Property LoadPercentage -Average).Average"`).toString().trim();
-    
-    return { 
-      diskUsage: diskOutput + '%', 
-      memUsage: memOutput, 
-      cpuLoad: loadOutput + '%' 
-    };
-  } catch (e) {
-    return { error: "Stats failed: " + e.message };
-  }
+function appBaseUrl() {
+  if (process.env.TRADER_APP_URL) return process.env.TRADER_APP_URL.replace(/\/$/, "");
+  if (process.env.VERCEL_URL) return `https://${process.env.VERCEL_URL}`.replace(/\/$/, "");
+  return "http://localhost:3001";
 }
 
-function checkMemoryFile() {
-  const date = new Date().toISOString().split('T')[0];
-  // Adjust path for Surface environment
-  const memFile = path.join('C:\\Users\\micha\\.openclaw\\workspace\\memory', `${date}.md`);
-  if (fs.existsSync(memFile)) {
-    const stats = fs.statSync(memFile);
-    return { exists: true, size: stats.size + " bytes", path: memFile };
-  } else {
-    return { exists: false, checkedPath: memFile };
+async function fetchJson(url) {
+  const res = await fetch(url, { signal: AbortSignal.timeout(15000) });
+  if (!res.ok) {
+    throw new Error(`HTTP ${res.status} from ${url}`);
   }
+  return res.json();
 }
 
-const report = {
-  timestamp: new Date().toISOString(),
-  system: getSystemStats(),
-  memory: checkMemoryFile()
-};
+async function main() {
+  const baseUrl = appBaseUrl();
+  const [health, report] = await Promise.all([
+    fetchJson(`${baseUrl}/api/health`),
+    fetchJson(`${baseUrl}/api/report?limit=8`),
+  ]);
 
-console.log(JSON.stringify(report, null, 2));
+  const summary = {
+    timestamp: new Date().toISOString(),
+    observerRole: "OpenClaw Observer",
+    target: baseUrl,
+    status: health.alive ? (health.trading ? "Alive and Trading" : "Alive but Waiting") : "Offline",
+    narrative: report.narrative || "No narrative available.",
+    tradesIn24h: health.trades ?? 0,
+    decisionsIn24h: health.decisions ?? 0,
+  };
+
+  console.log(JSON.stringify(summary, null, 2));
+}
+
+main().catch((error) => {
+  console.error(JSON.stringify({
+    timestamp: new Date().toISOString(),
+    observerRole: "OpenClaw Observer",
+    status: "Health check failed",
+    error: String(error),
+  }, null, 2));
+  process.exit(1);
+});

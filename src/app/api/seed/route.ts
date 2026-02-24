@@ -68,6 +68,26 @@ export async function POST(req: Request) {
         fifty_two_week_low NUMERIC,
         average_volume NUMERIC,
         created_at TIMESTAMPTZ DEFAULT NOW()
+      )`,
+      `CREATE TABLE IF NOT EXISTS "st-logs" (
+        id SERIAL PRIMARY KEY,
+        category VARCHAR(50) NOT NULL,
+        message TEXT NOT NULL,
+        details JSONB,
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      )`,
+      `CREATE TABLE IF NOT EXISTS "st-symbol-settings" (
+        symbol VARCHAR(20) PRIMARY KEY,
+        name VARCHAR(100),
+        enabled BOOLEAN NOT NULL DEFAULT TRUE,
+        auto_trade BOOLEAN NOT NULL DEFAULT TRUE,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      )`,
+      `CREATE TABLE IF NOT EXISTS "st-app-settings" (
+        key VARCHAR(50) PRIMARY KEY,
+        value TEXT NOT NULL,
+        updated_at TIMESTAMPTZ DEFAULT NOW()
       )`
     ];
 
@@ -109,6 +129,45 @@ export async function POST(req: Request) {
     if (!sr.ok) {
         const text = await sr.text();
         throw new Error(`Seed Fail (${sr.status}): ${text}`);
+    }
+
+    const settingsSql = `
+      INSERT INTO "st-symbol-settings" (symbol, name, enabled, auto_trade)
+      SELECT symbol, name, TRUE, TRUE FROM "st-holdings"
+      ON CONFLICT (symbol) DO NOTHING
+    `;
+
+    const appSettingsSql = `
+      INSERT INTO "st-app-settings" (key, value)
+      VALUES ('global_auto_trade', 'true')
+      ON CONFLICT (key) DO NOTHING
+    `;
+
+    const [settingsRes, appSettingsRes] = await Promise.all([
+      fetch(`${API_URL}/pg/query`, {
+        method: 'POST',
+        headers: {
+          'apikey': API_KEY,
+          'Authorization': `Bearer ${API_KEY}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ query: settingsSql })
+      }),
+      fetch(`${API_URL}/pg/query`, {
+        method: 'POST',
+        headers: {
+          'apikey': API_KEY,
+          'Authorization': `Bearer ${API_KEY}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ query: appSettingsSql })
+      })
+    ]);
+
+    if (!settingsRes.ok || !appSettingsRes.ok) {
+      const sText = await settingsRes.text();
+      const aText = await appSettingsRes.text();
+      throw new Error(`Settings seed failed: symbols(${settingsRes.status}) ${sText}; app(${appSettingsRes.status}) ${aText}`);
     }
 
     return NextResponse.json({ ok: true, message: "Remote DB initialized and seeded." });
