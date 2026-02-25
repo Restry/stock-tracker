@@ -5,6 +5,11 @@ import {
   getSymbolSettings,
   type SymbolSetting,
 } from "./trader-settings";
+import {
+  computeTechnicalIndicators,
+  formatIndicatorsForPrompt,
+  type TechnicalIndicators,
+} from "./technical-indicators";
 
 export interface Decision {
   symbol: string;
@@ -62,13 +67,50 @@ interface DecisionContext {
     positiveHits: string[];
     negativeHits: string[];
   };
+  technicalIndicators: {
+    rsi14: number | null;
+    rsiSignal: string | null;
+    sma5: number | null;
+    sma20: number | null;
+    sma60: number | null;
+    maShortAboveLong: boolean | null;
+    maGoldenCross: boolean | null;
+    priceAboveSma20: boolean | null;
+    macdBullish: boolean | null;
+    macdHistogram: number | null;
+    bollingerPosition: number | null;
+    atr14: number | null;
+    volatilityPct: number | null;
+    volumeRatio: number | null;
+    volumeTrend: string | null;
+    roc5: number | null;
+    roc20: number | null;
+    consecutiveUp: number;
+    consecutiveDown: number;
+    technicalScore: number;
+    technicalSignal: string;
+    dataPoints: number;
+  };
+  riskConstraints: {
+    stopLossTriggered: boolean;
+    maxPositionReached: boolean;
+    cooldownActive: boolean;
+    dailyTradeCount: number;
+    dailyTradeLimit: number;
+  };
   recentPriceHistory: Array<{
     price: number;
     changePercent: number;
     timestamp: string;
   }>;
+  previousDecisions: Array<{
+    action: string;
+    confidence: number;
+    createdAt: string;
+  }>;
   newsSummary: string;
   strategyBias: string;
+  technicalSummary: string;
 }
 
 interface DeepSeekDecisionPayload {
@@ -86,6 +128,7 @@ const XIAOMI_SYMBOL = "01810.HK";
 const isTradingDay = (d: Date): boolean => ![0, 6].includes(d.getDay());
 const DEEPSEEK_API_URL = process.env.DEEPSEEK_API_URL || "https://api.deepseek.com/chat/completions";
 const DEEPSEEK_MODEL = process.env.DEEPSEEK_MODEL || "deepseek-chat";
+const IS_AZURE_OPENAI = DEEPSEEK_API_URL.includes(".openai.azure.com");
 const toNumber = (value: number | string | null | undefined): number => {
   if (typeof value === "number") return value;
   if (typeof value === "string") return parseFloat(value) || 0;
@@ -150,27 +193,97 @@ async function searchMarketNews(symbol: string): Promise<string> {
   }
 }
 
-// Sentiment keywords with weighted scoring
-const POSITIVE_KEYWORDS = [
-  "growth", "beat", "upgrade", "surge", "rally", "bullish", "outperform",
-  "strong", "record", "innovation", "partnership", "expansion", "revenue growth",
-  "profit", "dividend", "breakthrough", "exceed", "momentum", "buy rating",
-  "ai", "cloud", "market share",
+// ─── Enhanced Sentiment Analysis with Weighted Keywords ───
+
+const POSITIVE_KEYWORDS: Array<{ word: string; weight: number }> = [
+  // High impact (weight 3)
+  { word: "beat expectations", weight: 3 }, { word: "record revenue", weight: 3 },
+  { word: "record profit", weight: 3 }, { word: "upgrade", weight: 3 },
+  { word: "buy rating", weight: 3 }, { word: "outperform", weight: 3 },
+  { word: "breakthrough", weight: 3 }, { word: "strong buy", weight: 3 },
+  // Medium impact (weight 2)
+  { word: "revenue growth", weight: 2 }, { word: "beat", weight: 2 },
+  { word: "surge", weight: 2 }, { word: "rally", weight: 2 },
+  { word: "bullish", weight: 2 }, { word: "expansion", weight: 2 },
+  { word: "partnership", weight: 2 }, { word: "innovation", weight: 2 },
+  { word: "exceed", weight: 2 }, { word: "market share gain", weight: 2 },
+  { word: "buyback", weight: 2 }, { word: "repurchas", weight: 2 },
+  // Low impact (weight 1)
+  { word: "growth", weight: 1 }, { word: "strong", weight: 1 },
+  { word: "profit", weight: 1 }, { word: "dividend", weight: 1 },
+  { word: "momentum", weight: 1 }, { word: "cloud", weight: 1 },
+  { word: "ai", weight: 0.5 },  // Very common, low signal
 ];
 
-const NEGATIVE_KEYWORDS = [
-  "decline", "miss", "downgrade", "drop", "bearish", "underperform",
-  "weak", "lawsuit", "investigation", "layoff", "recession", "loss",
-  "warning", "cut", "sell rating", "tariff", "sanction", "ban",
-  "debt", "default", "concern",
+const NEGATIVE_KEYWORDS: Array<{ word: string; weight: number }> = [
+  // High impact (weight 3)
+  { word: "downgrade", weight: 3 }, { word: "sell rating", weight: 3 },
+  { word: "bankruptcy", weight: 3 }, { word: "fraud", weight: 3 },
+  { word: "investigation", weight: 3 }, { word: "default", weight: 3 },
+  { word: "profit warning", weight: 3 }, { word: "guidance cut", weight: 3 },
+  // Medium impact (weight 2)
+  { word: "miss", weight: 2 }, { word: "decline", weight: 2 },
+  { word: "bearish", weight: 2 }, { word: "underperform", weight: 2 },
+  { word: "layoff", weight: 2 }, { word: "lawsuit", weight: 2 },
+  { word: "tariff", weight: 2 }, { word: "sanction", weight: 2 },
+  { word: "recession", weight: 2 }, { word: "ban", weight: 2 },
+  // Low impact (weight 1)
+  { word: "drop", weight: 1 }, { word: "weak", weight: 1 },
+  { word: "loss", weight: 1 }, { word: "warning", weight: 1 },
+  { word: "cut", weight: 1 }, { word: "concern", weight: 1 },
+  { word: "debt", weight: 1 }, { word: "pressure", weight: 1 },
+];
+
+// Negation phrases that flip sentiment
+const NEGATION_PATTERNS = [
+  /not\s+(?:a\s+)?declin/i, /no\s+(?:significant\s+)?loss/i,
+  /not\s+weak/i, /avoid(?:ed|ing)?\s+loss/i,
+  /despite\s+(?:the\s+)?(?:concern|drop|decline)/i,
+  /not\s+(?:a\s+)?concern/i, /no\s+downgrade/i,
 ];
 
 function computeSentimentScore(news: string): { score: number; positiveHits: string[]; negativeHits: string[] } {
   const lower = news.toLowerCase();
-  const positiveHits = POSITIVE_KEYWORDS.filter(kw => lower.includes(kw));
-  const negativeHits = NEGATIVE_KEYWORDS.filter(kw => lower.includes(kw));
-  const score = (positiveHits.length - negativeHits.length) / Math.max(positiveHits.length + negativeHits.length, 1);
-  return { score, positiveHits, negativeHits };
+
+  // Detect negation patterns (reduce false negatives)
+  let negationBonus = 0;
+  for (const pat of NEGATION_PATTERNS) {
+    if (pat.test(news)) negationBonus += 0.5;
+  }
+
+  let positiveScore = 0;
+  let negativeScore = 0;
+  const positiveHits: string[] = [];
+  const negativeHits: string[] = [];
+
+  for (const { word, weight } of POSITIVE_KEYWORDS) {
+    // Count occurrences (cap at 3 to avoid single-article bias)
+    const regex = new RegExp(word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi');
+    const matches = lower.match(regex);
+    if (matches) {
+      const count = Math.min(matches.length, 3);
+      positiveScore += weight * count;
+      positiveHits.push(word);
+    }
+  }
+
+  for (const { word, weight } of NEGATIVE_KEYWORDS) {
+    const regex = new RegExp(word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi');
+    const matches = lower.match(regex);
+    if (matches) {
+      const count = Math.min(matches.length, 3);
+      negativeScore += weight * count;
+      negativeHits.push(word);
+    }
+  }
+
+  // Apply negation bonus (shifts score toward positive)
+  positiveScore += negationBonus;
+
+  const total = positiveScore + negativeScore;
+  const score = total > 0 ? (positiveScore - negativeScore) / total : 0;
+
+  return { score: Math.max(-1, Math.min(1, score)), positiveHits, negativeHits };
 }
 
 async function getRecentPriceHistory(symbol: string): Promise<DecisionContext["recentPriceHistory"]> {
@@ -187,6 +300,89 @@ async function getRecentPriceHistory(symbol: string): Promise<DecisionContext["r
   }));
 }
 
+// ─── Risk Control Constants ───
+const STOP_LOSS_PCT = -15;           // Force SELL if PnL drops below -15%
+const MAX_POSITION_VALUE_USD = 50000; // Max single position value in USD
+const DECISION_COOLDOWN_MIN = 30;     // Min minutes between decisions for same symbol
+const DAILY_TRADE_LIMIT = 6;          // Max trades per symbol per day
+
+// ─── Risk & Cooldown Checks ───
+
+interface RiskCheckResult {
+  stopLossTriggered: boolean;
+  maxPositionReached: boolean;
+  cooldownActive: boolean;
+  dailyTradeCount: number;
+  lastDecisionAction: string | null;
+  lastDecisionTime: string | null;
+}
+
+async function checkRiskConstraints(
+  symbol: string,
+  currentPrice: number,
+  currency: string,
+  costPrice: number | null,
+  shares: number,
+): Promise<RiskCheckResult> {
+  const pnlPct = costPrice && costPrice > 0 && currentPrice > 0
+    ? ((currentPrice - costPrice) / costPrice) * 100
+    : 0;
+
+  // Stop-loss check
+  const stopLossTriggered = shares > 0 && pnlPct < STOP_LOSS_PCT;
+
+  // Max position size (approximate USD value)
+  const fxRate = currency === "HKD" ? 0.128 : currency === "CNY" ? 0.138 : 1;
+  const positionValueUsd = currentPrice * shares * fxRate;
+  const maxPositionReached = positionValueUsd >= MAX_POSITION_VALUE_USD;
+
+  // Decision cooldown — check time since last decision
+  let cooldownActive = false;
+  let lastDecisionAction: string | null = null;
+  let lastDecisionTime: string | null = null;
+  try {
+    const cdSql = `SELECT action, created_at FROM "st-decisions"
+      WHERE symbol = ${toSqlVal(symbol)}
+      ORDER BY created_at DESC LIMIT 1`;
+    const { rows: cdRows } = await pool.query(cdSql);
+    if (cdRows.length > 0) {
+      const lastDec = cdRows[0] as { action: string; created_at: string };
+      lastDecisionAction = lastDec.action;
+      lastDecisionTime = lastDec.created_at;
+      const elapsed = (Date.now() - new Date(lastDec.created_at).getTime()) / 60000;
+      cooldownActive = elapsed < DECISION_COOLDOWN_MIN;
+    }
+  } catch { /* ignore */ }
+
+  // Daily trade count
+  let dailyTradeCount = 0;
+  try {
+    const tcSql = `SELECT COUNT(*) as cnt FROM "st-trades"
+      WHERE symbol = ${toSqlVal(symbol)}
+      AND created_at > CURRENT_DATE`;
+    const { rows: tcRows } = await pool.query(tcSql);
+    dailyTradeCount = toNumber((tcRows[0] as { cnt: number | string })?.cnt);
+  } catch { /* ignore */ }
+
+  return { stopLossTriggered, maxPositionReached, cooldownActive, dailyTradeCount, lastDecisionAction, lastDecisionTime };
+}
+
+// ─── Previous decisions for context ───
+
+async function getPreviousDecisions(symbol: string, limit: number = 5): Promise<DecisionContext["previousDecisions"]> {
+  try {
+    const sql = `SELECT action, confidence, created_at FROM "st-decisions"
+      WHERE symbol = ${toSqlVal(symbol)}
+      ORDER BY created_at DESC LIMIT ${toSqlVal(limit)}`;
+    const { rows } = await pool.query(sql);
+    return (rows as Array<{ action: string; confidence: number | string; created_at: string }>).map(r => ({
+      action: r.action,
+      confidence: toNumber(r.confidence),
+      createdAt: r.created_at,
+    }));
+  } catch { return []; }
+}
+
 async function buildDecisionContext(
   symbol: string,
   currentPrice: number,
@@ -201,6 +397,21 @@ async function buildDecisionContext(
     ? ((currentPrice - costPrice) / costPrice) * 100
     : null;
   const recentPriceHistory = await getRecentPriceHistory(symbol);
+
+  // Compute technical indicators
+  const ti = await computeTechnicalIndicators(
+    symbol,
+    currentPrice,
+    quote?.fiftyTwoWeekHigh,
+    quote?.fiftyTwoWeekLow
+  );
+  const technicalSummary = formatIndicatorsForPrompt(ti, currentPrice);
+
+  // Risk constraints
+  const risk = await checkRiskConstraints(symbol, currentPrice, currency, costPrice, shares);
+
+  // Previous decisions for continuity
+  const previousDecisions = await getPreviousDecisions(symbol);
 
   return {
     symbol,
@@ -221,11 +432,44 @@ async function buildDecisionContext(
       pnlPct,
     },
     sentiment,
+    technicalIndicators: {
+      rsi14: ti.rsi14,
+      rsiSignal: ti.rsiSignal,
+      sma5: ti.sma5,
+      sma20: ti.sma20,
+      sma60: ti.sma60,
+      maShortAboveLong: ti.maShortAboveLong,
+      maGoldenCross: ti.maGoldenCross,
+      priceAboveSma20: ti.priceAboveSma20,
+      macdBullish: ti.macdBullish,
+      macdHistogram: ti.macdHistogram,
+      bollingerPosition: ti.bollingerPosition,
+      atr14: ti.atr14,
+      volatilityPct: ti.volatilityPct,
+      volumeRatio: ti.volumeRatio,
+      volumeTrend: ti.volumeTrend,
+      roc5: ti.roc5,
+      roc20: ti.roc20,
+      consecutiveUp: ti.consecutiveUp,
+      consecutiveDown: ti.consecutiveDown,
+      technicalScore: ti.technicalScore,
+      technicalSignal: ti.technicalSignal,
+      dataPoints: ti.dataPoints,
+    },
+    riskConstraints: {
+      stopLossTriggered: risk.stopLossTriggered,
+      maxPositionReached: risk.maxPositionReached,
+      cooldownActive: risk.cooldownActive,
+      dailyTradeCount: risk.dailyTradeCount,
+      dailyTradeLimit: DAILY_TRADE_LIMIT,
+    },
     recentPriceHistory,
+    previousDecisions,
     newsSummary: news.substring(0, 2000),
     strategyBias: symbol === XIAOMI_SYMBOL
       ? "Xiaomi continuous monitoring: output explicit BUY/SELL/HOLD every trading day."
       : "General multi-factor swing/position management.",
+    technicalSummary,
   };
 }
 
@@ -249,30 +493,73 @@ async function decideWithDeepSeek(context: DecisionContext): Promise<Decision> {
     throw new Error("DEEPSEEK_API_KEY is not configured");
   }
 
+  // Build enhanced system prompt with risk constraints
+  const riskNotes: string[] = [];
+  if (context.riskConstraints.stopLossTriggered) riskNotes.push("STOP-LOSS TRIGGERED: Position PnL is below -15%. Strongly consider SELL.");
+  if (context.riskConstraints.maxPositionReached) riskNotes.push("MAX POSITION SIZE reached. Do NOT recommend BUY.");
+  if (context.riskConstraints.dailyTradeCount >= context.riskConstraints.dailyTradeLimit) riskNotes.push(`DAILY TRADE LIMIT reached (${context.riskConstraints.dailyTradeCount}/${context.riskConstraints.dailyTradeLimit}). Recommend HOLD.`);
+
+  const prevDecStr = context.previousDecisions.length > 0
+    ? `Recent decisions: ${context.previousDecisions.map(d => `${d.action}(${d.confidence}%) at ${d.createdAt}`).join(", ")}. Avoid unnecessary signal flipping.`
+    : "";
+
+  const systemPrompt = `You are a disciplined quantitative equity trader. Analyze the provided data and return ONLY valid JSON: {"action":"BUY|SELL|HOLD","confidence":0-100,"reasoning":"..."}.
+
+DECISION FRAMEWORK:
+1. Technical indicators (RSI, MACD, Moving Averages, Bollinger Bands) — weight 40%
+2. News sentiment analysis — weight 25%  
+3. Position P&L and risk management — weight 20%
+4. Valuation fundamentals (PE, dividend yield) — weight 15%
+
+RISK RULES (MANDATORY — override other signals):
+${riskNotes.length > 0 ? riskNotes.map(n => `- ${n}`).join("\n") : "- No risk overrides active."}
+
+${prevDecStr}
+
+Keep reasoning concise (under 300 chars). Use the technical indicators summary provided to inform your analysis.`;
+
+  const userPrompt = `Trading decision for ${context.symbol} (${context.companyName}):
+
+MARKET DATA:
+- Price: ${context.quote.price} ${context.quote.currency} (${context.quote.changePercent >= 0 ? "+" : ""}${context.quote.changePercent.toFixed(2)}%)
+- PE: ${context.quote.pe ?? "N/A"}, DivYield: ${context.quote.dividendYield ?? "N/A"}%
+- 52W Range: ${context.quote.fiftyTwoWeekLow ?? "?"} – ${context.quote.fiftyTwoWeekHigh ?? "?"}
+
+POSITION:
+- Shares: ${context.position.shares}, Cost: ${context.position.costPrice ?? "N/A"}, PnL: ${context.position.pnlPct !== null ? context.position.pnlPct.toFixed(1) + "%" : "N/A"}
+
+${context.technicalSummary}
+
+SENTIMENT: Score=${context.sentiment.score.toFixed(2)}
+- Positive: ${context.sentiment.positiveHits.join(", ") || "none"}
+- Negative: ${context.sentiment.negativeHits.join(", ") || "none"}
+
+NEWS SUMMARY:
+${context.newsSummary.substring(0, 1200)}
+
+STRATEGY: ${context.strategyBias}`;
+
   const body = {
     model: DEEPSEEK_MODEL,
     temperature: 0.1,
     messages: [
-      {
-        role: "system",
-        content:
-          "You are a disciplined equity trader. Return ONLY JSON: {\"action\":\"BUY|SELL|HOLD\",\"confidence\":0-100,\"reasoning\":\"...\"}. Use provided technical, sentiment, and position context.",
-      },
-      {
-        role: "user",
-        content: `Make a trading decision for ${context.symbol} using this context:\n${JSON.stringify(context)}`,
-      },
+      { role: "system", content: systemPrompt },
+      { role: "user", content: userPrompt },
     ],
   };
 
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (IS_AZURE_OPENAI) {
+    headers["api-key"] = apiKey;
+  } else {
+    headers["Authorization"] = `Bearer ${apiKey}`;
+  }
+
   const res = await fetch(DEEPSEEK_API_URL, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${apiKey}`,
-    },
+    headers,
     body: JSON.stringify(body),
-    signal: AbortSignal.timeout(30000),
+    signal: AbortSignal.timeout(60000),
   });
 
   if (!res.ok) {
@@ -323,7 +610,9 @@ function analyzeSignals(
   costPrice: number | null,
   shares: number,
   news: string,
-  quote?: Quote | null
+  quote?: Quote | null,
+  technicalIndicators?: TechnicalIndicators | null,
+  riskCheck?: RiskCheckResult | null,
 ): Decision {
   const { score: sentimentScore, positiveHits, negativeHits } = computeSentimentScore(news);
 
@@ -331,17 +620,26 @@ function analyzeSignals(
   let confidence = 50;
   const reasons: string[] = [];
 
+  // ─── Risk overrides (highest priority) ───
+  if (riskCheck?.stopLossTriggered) {
+    return {
+      symbol, action: "SELL", confidence: 90,
+      reasoning: `⚠️ 止损触发：PnL 低于 ${STOP_LOSS_PCT}%，强制卖出以控制风险。`,
+      newsSummary: news.substring(0, 2000),
+      marketData: { source: "fallback_rules", riskOverride: "stop_loss" },
+    };
+  }
+
   // Technical analysis
   let pnlPct = 0;
   if (costPrice && costPrice > 0 && currentPrice > 0) {
     pnlPct = ((currentPrice - costPrice) / costPrice) * 100;
   }
 
-  // --- MSFT Special Rules ---
   const isMSFT = symbol === "MSFT";
   const isXiaomi = symbol === XIAOMI_SYMBOL;
   const now = new Date();
-  const isQuarterEndMonth = [2, 5, 8, 11].includes(now.getMonth()); // March, June, Sept, Dec
+  const isQuarterEndMonth = [2, 5, 8, 11].includes(now.getMonth());
   const isQuarterEndDays = now.getDate() >= 25;
   const isQuarterEnd = isQuarterEndMonth && isQuarterEndDays;
 
@@ -353,82 +651,130 @@ function analyzeSignals(
     reasons.push(`风险因素: ${negativeHits.slice(0, 4).join(", ")}`);
   }
 
-  // Decision logic with multi-factor scoring
+  // ─── Multi-factor scoring ───
   let signalStrength = 0;
-  signalStrength += sentimentScore * 40;
 
+  // Factor 1: Sentiment (weight ~25%)
+  signalStrength += sentimentScore * 30;
+
+  // Factor 2: Technical indicators (weight ~40%) — NEW
+  if (technicalIndicators && technicalIndicators.dataPoints >= 10) {
+    // Use composite technical score directly (already -100 to +100)
+    signalStrength += technicalIndicators.technicalScore * 0.4;
+    reasons.push(`技术评分: ${technicalIndicators.technicalScore} (${technicalIndicators.technicalSignal})`);
+
+    // RSI-specific signals
+    if (technicalIndicators.rsi14 !== null) {
+      if (technicalIndicators.rsi14 < 30) {
+        signalStrength += 12;
+        reasons.push(`RSI超卖 (${technicalIndicators.rsi14.toFixed(0)})`);
+      } else if (technicalIndicators.rsi14 > 70) {
+        signalStrength -= 12;
+        reasons.push(`RSI超买 (${technicalIndicators.rsi14.toFixed(0)})`);
+      }
+    }
+
+    // MACD confirmation
+    if (technicalIndicators.macdBullish === true && sentimentScore > 0) {
+      signalStrength += 8;
+    } else if (technicalIndicators.macdBullish === false && sentimentScore < 0) {
+      signalStrength -= 8;
+    }
+
+    // Bollinger Bands
+    if (technicalIndicators.bollingerPosition !== null) {
+      if (technicalIndicators.bollingerPosition < 0.15) {
+        signalStrength += 10;
+        reasons.push("布林带下轨支撑");
+      } else if (technicalIndicators.bollingerPosition > 0.85) {
+        signalStrength -= 10;
+        reasons.push("布林带上轨压力");
+      }
+    }
+
+    // Volume confirmation
+    if (technicalIndicators.volumeRatio !== null && technicalIndicators.roc5 !== null) {
+      if (technicalIndicators.roc5 > 0 && technicalIndicators.volumeRatio > 1.3) {
+        signalStrength += 6;
+        reasons.push("放量上涨确认");
+      } else if (technicalIndicators.roc5 < 0 && technicalIndicators.volumeRatio > 1.3) {
+        signalStrength -= 6;
+        reasons.push("放量下跌警告");
+      }
+    }
+  }
+
+  // Factor 3: Position P&L (weight ~20%)
   if (costPrice && costPrice > 0) {
     if (pnlPct > 30) signalStrength -= 15;
-    else if (pnlPct > 10) signalStrength += 10;
-    else if (pnlPct < -20) signalStrength += 15;
+    else if (pnlPct > 10) signalStrength += 5;
+    else if (pnlPct < -20) signalStrength += 10;
+    else if (pnlPct < -10) signalStrength += 5;
   }
 
-  // --- Enhanced Indicator Scoring ---
+  // Factor 4: Valuation fundamentals (weight ~15%)
   if (quote) {
-    // 估值因子: 低PE且有盈利增长利好时加分
     if (quote.pe && quote.pe < 25 && sentimentScore > 0) {
-      signalStrength += 10;
-      reasons.push(`估值吸引力 (PE: ${quote.pe})`);
+      signalStrength += 8;
+      reasons.push(`估值吸引力 (PE: ${quote.pe.toFixed(1)})`);
     }
-    // 股息因子: 高股息加分
     if (quote.dividendYield && quote.dividendYield > 1.5) {
-      signalStrength += 5;
+      signalStrength += 4;
       reasons.push(`股息支撑 (${quote.dividendYield.toFixed(2)}%)`);
     }
-    // 价格区间因子: 接近52周低点且有基本面支撑时，视为抄底机会
     if (quote.fiftyTwoWeekLow && currentPrice < quote.fiftyTwoWeekLow * 1.15 && sentimentScore > 0) {
-      signalStrength += 15;
-      reasons.push("接近52周低位，存在超跌反弹空间");
+      signalStrength += 12;
+      reasons.push("接近52周低位，超跌反弹空间");
     }
     if (quote.changePercent && Math.abs(quote.changePercent) > 3) {
-      signalStrength += quote.changePercent > 0 ? 6 : -6;
-      reasons.push(`价格动量信号 (${quote.changePercent.toFixed(2)}%)`);
+      signalStrength += quote.changePercent > 0 ? 5 : -5;
     }
   }
 
-  // Xiaomi continuous-monitoring bias
+  // Symbol-specific adjustments
   if (isXiaomi) {
-    reasons.unshift("Xiaomi 连续监控模式：每个交易日必须输出明确 BUY/SELL/HOLD。");
-    signalStrength += sentimentScore * 12;
-    if (shares <= 0 && sentimentScore >= 0) signalStrength += 8;
+    reasons.unshift("Xiaomi 连续监控模式");
+    signalStrength += sentimentScore * 10;
+    if (shares <= 0 && sentimentScore >= 0) signalStrength += 6;
   }
 
   const newsVolume = positiveHits.length + negativeHits.length;
-  if (newsVolume >= 5) signalStrength += sentimentScore > 0 ? 10 : -10;
+  if (newsVolume >= 5) signalStrength += sentimentScore > 0 ? 8 : -8;
 
-  // Final Action Logic
+  // ─── Max position override ───
+  if (riskCheck?.maxPositionReached && signalStrength > 0) {
+    reasons.unshift("⚠️ 仓位已达上限，暂停加仓");
+    signalStrength = Math.min(signalStrength, 0);
+  }
+
+  // ─── Final Action Logic ───
   if (isMSFT) {
     if (isQuarterEnd && signalStrength > 0) {
       action = "BUY";
       confidence = 80;
-      reasons.unshift("季度末自动定投触发：MSFT 仅在季度末进行常规买入。");
+      reasons.unshift("季度末自动定投触发");
     } else {
       action = signalStrength < -25 ? "SELL" : "HOLD";
       confidence = 60;
-      if (action === "SELL") {
-        reasons.unshift("MSFT 卖出信号：基本面或技术面显著恶化。");
-      } else if (signalStrength > 15) {
-        reasons.unshift("MSFT 建议增持：技术形态或市场情绪积极。");
-      } else {
-        reasons.unshift("MSFT 中性观察。");
-      }
+      if (action === "SELL") reasons.unshift("MSFT 卖出信号：多因子恶化");
+      else if (signalStrength > 15) reasons.unshift("MSFT 建议增持");
+      else reasons.unshift("MSFT 中性观察");
     }
   } else {
-    // Xiaomi gets tighter thresholds for active daily actioning
     const buyThreshold = isXiaomi ? 8 : 15;
     const sellThreshold = isXiaomi ? -8 : -15;
     if (signalStrength > buyThreshold) {
       action = "BUY";
       confidence = Math.min(95, 55 + Math.floor(signalStrength));
-      reasons.unshift(`${symbol} 强烈买入：多因子分析显示前景乐观。`);
+      reasons.unshift(`${symbol} 买入：技术面+情绪面共振看多`);
     } else if (signalStrength < sellThreshold) {
       action = "SELL";
       confidence = Math.min(95, 55 + Math.floor(Math.abs(signalStrength)));
-      reasons.unshift(`${symbol} 卖出：风险因素超过利好指标。`);
+      reasons.unshift(`${symbol} 卖出：多因子共振看空`);
     } else {
       action = "HOLD";
       confidence = 50 + Math.floor(Math.abs(signalStrength));
-      reasons.unshift(`${symbol} 中性持仓。`);
+      reasons.unshift(`${symbol} 中性持仓`);
     }
   }
 
@@ -438,6 +784,10 @@ function analyzeSignals(
     pnlPct: pnlPct.toFixed(2),
     sentimentScore: sentimentScore.toFixed(2),
     signalStrength: signalStrength.toFixed(1),
+    technicalScore: technicalIndicators?.technicalScore ?? "N/A",
+    technicalSignal: technicalIndicators?.technicalSignal ?? "N/A",
+    rsi14: technicalIndicators?.rsi14?.toFixed(1) ?? "N/A",
+    macdBullish: technicalIndicators?.macdBullish ?? "N/A",
     pe: quote?.pe,
     marketCap: quote?.marketCap,
     divYield: quote?.dividendYield,
@@ -463,18 +813,17 @@ async function executeSimulatedTrade(
   decision: Decision,
   currentPrice: number,
   currency: string,
-  currentShares: number
+  currentShares: number,
+  currentCostPrice: number | null,
 ): Promise<Trade | null> {
   if (decision.action === "HOLD") return null;
 
   let tradeShares = 0;
   if (decision.action === "BUY") {
     if (decision.symbol === "MSFT") {
-      // MSFT: ~21,000 CNY = ~$2,900 USD
       const targetUsd = 2900;
       tradeShares = Math.floor(targetUsd / currentPrice);
     } else {
-      // Xiaomi: scales by confidence (200-1000 shares)
       tradeShares = Math.max(200, Math.floor((decision.confidence / 100) * 1000));
     }
   } else if (decision.action === "SELL") {
@@ -507,14 +856,25 @@ async function executeSimulatedTrade(
     )`;
   await pool.query(tradeSql);
 
-  // Update holdings (autonomous execution path)
+  // Update holdings
   if (decision.action === "BUY") {
+    // Ensure holding row exists
     const upsertSql = `INSERT INTO "st-holdings" (symbol, name, shares, cost_price, cost_currency, current_price, price_currency, exchange)
       VALUES (${toSqlVal(decision.symbol)}, ${toSqlVal(SYMBOL_NAMES[decision.symbol] || decision.symbol)}, 0, ${toSqlVal(currentPrice)}, ${toSqlVal(currency)}, ${toSqlVal(currentPrice)}, ${toSqlVal(currency)}, ${toSqlVal(decision.symbol.endsWith(".HK") ? "HKEX" : "AUTO")})
       ON CONFLICT (symbol) DO NOTHING`;
     await pool.query(upsertSql);
+
+    // Compute new weighted average cost price
+    // newCost = (oldShares * oldCost + newShares * newPrice) / (oldShares + newShares)
+    const oldCost = currentCostPrice && currentCostPrice > 0 ? currentCostPrice : currentPrice;
+    const newTotalShares = currentShares + tradeShares;
+    const newAvgCost = newTotalShares > 0
+      ? (currentShares * oldCost + tradeShares * currentPrice) / newTotalShares
+      : currentPrice;
+
     const buySql = `UPDATE "st-holdings"
       SET shares = shares + ${toSqlVal(tradeShares)},
+          cost_price = ${toSqlVal(Math.round(newAvgCost * 100) / 100)},
           current_price = ${toSqlVal(currentPrice)},
           price_currency = ${toSqlVal(currency)},
           updated_at = NOW()
@@ -590,6 +950,29 @@ export async function runDecisions(): Promise<{ decisions: Decision[]; trades: T
       news
     );
 
+    // Extract risk and technical data from context for reuse
+    const riskCheck = context.riskConstraints ? {
+      stopLossTriggered: context.riskConstraints.stopLossTriggered,
+      maxPositionReached: context.riskConstraints.maxPositionReached,
+      cooldownActive: context.riskConstraints.cooldownActive,
+      dailyTradeCount: context.riskConstraints.dailyTradeCount,
+      lastDecisionAction: null,
+      lastDecisionTime: null,
+    } as RiskCheckResult : null;
+    const dailyLimitReached = riskCheck ? riskCheck.dailyTradeCount >= DAILY_TRADE_LIMIT : false;
+    const techIndicators = context.technicalIndicators
+      ? context.technicalIndicators as unknown as import("./technical-indicators").TechnicalIndicators
+      : null;
+
+    // Risk gate: skip decision entirely if cooldown is active
+    if (riskCheck?.cooldownActive) {
+      await logAction("risk", `Cooldown active for ${setting.symbol}, skipping decision`, {
+        action: "COOLDOWN_SKIP",
+        symbol: setting.symbol,
+      });
+      continue;
+    }
+
     let decision: Decision;
     let decisionSource = "deepseek";
     try {
@@ -602,7 +985,9 @@ export async function runDecisions(): Promise<{ decisions: Decision[]; trades: T
         costPrice,
         shares,
         news,
-        quote
+        quote,
+        techIndicators,
+        riskCheck
       );
       decision.reasoning = `[Fallback due to DeepSeek failure] ${decision.reasoning}`;
       decision.marketData = {
@@ -631,6 +1016,8 @@ export async function runDecisions(): Promise<{ decisions: Decision[]; trades: T
           source: (decision.marketData?.source || decisionSource),
           enabled: setting.enabled,
           autoTrade: setting.autoTrade,
+          riskCheck,
+          technicalScore: techIndicators?.technicalScore ?? null,
         }))}
       )`;
     await pool.query(decisionSql);
@@ -639,19 +1026,29 @@ export async function runDecisions(): Promise<{ decisions: Decision[]; trades: T
     await logAction("decision", `Generated ${decision.action} signal for ${setting.symbol}`, {
       confidence: decision.confidence,
       source: decisionSource,
+      technicalScore: techIndicators?.technicalScore ?? null,
     });
 
     decisions.push(decision);
 
-    // 4. Execute REAL-market-based simulated trade
+    // 4. Execute trade with risk enforcement
     if (tradingDay && globalAutoTrade && setting.autoTrade && currentPrice > 0) {
-      const trade = await executeSimulatedTrade(
-        decision,
-        currentPrice,
-        currency,
-        shares
-      );
-      if (trade) trades.push(trade);
+      // Daily trade limit check
+      if (dailyLimitReached) {
+        await logAction("risk", `Daily trade limit reached (${riskCheck?.dailyTradeCount ?? 0}/${DAILY_TRADE_LIMIT}), skipping trade for ${setting.symbol}`, {
+          action: "DAILY_LIMIT_SKIP",
+          symbol: setting.symbol,
+        });
+      } else {
+        const trade = await executeSimulatedTrade(
+          decision,
+          currentPrice,
+          currency,
+          shares,
+          costPrice
+        );
+        if (trade) trades.push(trade);
+      }
     } else if (tradingDay && (!globalAutoTrade || !setting.autoTrade)) {
       await logAction("trade", `Skipped auto-trade for ${setting.symbol}`, {
         action: "AUTO_TRADE_SKIPPED",
