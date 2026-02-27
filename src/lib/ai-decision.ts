@@ -306,6 +306,106 @@ const MAX_POSITION_VALUE_USD = 50000; // Max single position value in USD
 const DECISION_COOLDOWN_MIN = 30;     // Min minutes between decisions for same symbol
 const DAILY_TRADE_LIMIT = 6;          // Max trades per symbol per day
 
+// ─── Intraday Mean Reversion (做 T) & Cost Basis Protection ───
+
+interface IntradaySwingResult {
+  triggered: boolean;
+  reason: string;
+}
+
+/** T-Buy: Bollinger lower band + RSI oversold → buy signal regardless of sentiment */
+function checkIntradaySwingSignal(
+  bollingerPosition: number | null,
+  rsi14: number | null,
+): IntradaySwingResult {
+  if (
+    bollingerPosition !== null &&
+    rsi14 !== null &&
+    bollingerPosition < 0.1 &&
+    rsi14 < 30
+  ) {
+    return {
+      triggered: true,
+      reason: `T-Buy 信号：布林下轨(${(bollingerPosition * 100).toFixed(0)}%) + RSI超卖(${rsi14.toFixed(0)})`,
+    };
+  }
+  return { triggered: false, reason: "" };
+}
+
+interface ProfitTakingResult {
+  triggered: boolean;
+  intradayGainPct: number;
+  reason: string;
+}
+
+/** Profit-taking: SELL if intraday gain > 3% from daily low to reduce cost basis */
+function checkProfitTaking(
+  currentPrice: number,
+  recentPriceHistory: DecisionContext["recentPriceHistory"],
+  shares: number,
+): ProfitTakingResult {
+  if (shares <= 0 || recentPriceHistory.length === 0) {
+    return { triggered: false, intradayGainPct: 0, reason: "" };
+  }
+  // Estimate daily low from recent intraday data points
+  const todayPrices = recentPriceHistory.slice(0, 6).map((p) => p.price).filter((p) => p > 0);
+  if (todayPrices.length === 0) {
+    return { triggered: false, intradayGainPct: 0, reason: "" };
+  }
+  const dailyLow = Math.min(...todayPrices);
+  const intradayGainPct = dailyLow > 0 ? ((currentPrice - dailyLow) / dailyLow) * 100 : 0;
+  if (intradayGainPct > 3) {
+    return {
+      triggered: true,
+      intradayGainPct,
+      reason: `日内冲高 ${intradayGainPct.toFixed(1)}%（从低点 ${dailyLow.toFixed(2)} 回升），建议做T卖出降低成本`,
+    };
+  }
+  return { triggered: false, intradayGainPct, reason: "" };
+}
+
+interface CostBasisAdjustment {
+  signalDelta: number;
+  reason: string;
+}
+
+/** Adjust signal strength to prioritize reducing cost_price for existing holdings */
+function applyCostBasisProtection(
+  currentPrice: number,
+  costPrice: number | null,
+  shares: number,
+  bollingerPosition: number | null,
+  rsi14: number | null,
+): CostBasisAdjustment {
+  if (!costPrice || costPrice <= 0 || shares <= 0) {
+    return { signalDelta: 0, reason: "" };
+  }
+  const priceToCostRatio = currentPrice / costPrice;
+
+  // Price well below cost & technicals support buying → boost BUY to average down
+  if (priceToCostRatio < 0.95) {
+    const techSupport =
+      (bollingerPosition !== null && bollingerPosition < 0.3) ||
+      (rsi14 !== null && rsi14 < 40);
+    if (techSupport) {
+      return {
+        signalDelta: 15,
+        reason: `成本保护：价格低于成本价 ${((1 - priceToCostRatio) * 100).toFixed(1)}%，技术面支撑加仓摊薄成本`,
+      };
+    }
+  }
+
+  // Price above cost with quick gain → boost SELL to lock profit and reduce basis
+  if (priceToCostRatio > 1.03) {
+    return {
+      signalDelta: -10,
+      reason: `成本保护：价格高于成本价 ${((priceToCostRatio - 1) * 100).toFixed(1)}%，建议部分止盈降低持仓成本`,
+    };
+  }
+
+  return { signalDelta: 0, reason: "" };
+}
+
 // ─── Risk & Cooldown Checks ───
 
 interface RiskCheckResult {
@@ -499,6 +599,29 @@ async function decideWithDeepSeek(context: DecisionContext): Promise<Decision> {
   if (context.riskConstraints.maxPositionReached) riskNotes.push("MAX POSITION SIZE reached. Do NOT recommend BUY.");
   if (context.riskConstraints.dailyTradeCount >= context.riskConstraints.dailyTradeLimit) riskNotes.push(`DAILY TRADE LIMIT reached (${context.riskConstraints.dailyTradeCount}/${context.riskConstraints.dailyTradeLimit}). Recommend HOLD.`);
 
+  // Intraday swing / T-trading signals
+  const tBuy = checkIntradaySwingSignal(
+    context.technicalIndicators.bollingerPosition,
+    context.technicalIndicators.rsi14,
+  );
+  const profitTake = checkProfitTaking(
+    context.quote.price,
+    context.recentPriceHistory,
+    context.position.shares,
+  );
+  const costBasis = applyCostBasisProtection(
+    context.quote.price,
+    context.position.costPrice,
+    context.position.shares,
+    context.technicalIndicators.bollingerPosition,
+    context.technicalIndicators.rsi14,
+  );
+
+  const intradayNotes: string[] = [];
+  if (tBuy.triggered) intradayNotes.push(`T-BUY SIGNAL ACTIVE: ${tBuy.reason}`);
+  if (profitTake.triggered) intradayNotes.push(`PROFIT-TAKING SIGNAL: ${profitTake.reason}`);
+  if (costBasis.signalDelta !== 0) intradayNotes.push(`COST BASIS PROTECTION: ${costBasis.reason}`);
+
   const prevDecStr = context.previousDecisions.length > 0
     ? `Recent decisions: ${context.previousDecisions.map(d => `${d.action}(${d.confidence}%) at ${d.createdAt}`).join(", ")}. Avoid unnecessary signal flipping.`
     : "";
@@ -511,8 +634,16 @@ DECISION FRAMEWORK:
 3. Position P&L and risk management — weight 20%
 4. Valuation fundamentals (PE, dividend yield) — weight 15%
 
+INTRADAY T-TRADING RULES (做 T):
+- If Bollinger Band position < 10% AND RSI < 30, this is a T-Buy opportunity. Recommend BUY even if sentiment is neutral. The goal is intraday mean reversion.
+- If intraday gain from daily low exceeds 3%, recommend partial SELL to lock in the swing profit and reduce holding cost.
+- Always prioritize reducing cost_price for existing holdings: favor buying below cost (to average down) and selling above cost (to lower cost basis).
+- T-trading signals should increase your confidence in the recommended action.
+
 RISK RULES (MANDATORY — override other signals):
 ${riskNotes.length > 0 ? riskNotes.map(n => `- ${n}`).join("\n") : "- No risk overrides active."}
+
+${intradayNotes.length > 0 ? `ACTIVE INTRADAY SIGNALS:\n${intradayNotes.map(n => `- ${n}`).join("\n")}` : ""}
 
 ${prevDecStr}
 
@@ -613,6 +744,7 @@ function analyzeSignals(
   quote?: Quote | null,
   technicalIndicators?: TechnicalIndicators | null,
   riskCheck?: RiskCheckResult | null,
+  recentPriceHistory?: DecisionContext["recentPriceHistory"],
 ): Decision {
   const { score: sentimentScore, positiveHits, negativeHits } = computeSentimentScore(news);
 
@@ -702,6 +834,36 @@ function analyzeSignals(
         reasons.push("放量下跌警告");
       }
     }
+  }
+
+  // ─── Intraday Mean Reversion (做 T) ───
+  const tBuy = checkIntradaySwingSignal(
+    technicalIndicators?.bollingerPosition ?? null,
+    technicalIndicators?.rsi14 ?? null,
+  );
+  if (tBuy.triggered) {
+    signalStrength += 20;
+    reasons.push(tBuy.reason);
+  }
+
+  // ─── Profit-Taking Logic ───
+  const profitTake = checkProfitTaking(currentPrice, recentPriceHistory ?? [], shares);
+  if (profitTake.triggered) {
+    signalStrength -= 18;
+    reasons.push(profitTake.reason);
+  }
+
+  // ─── Cost Basis Protection ───
+  const costBasis = applyCostBasisProtection(
+    currentPrice,
+    costPrice,
+    shares,
+    technicalIndicators?.bollingerPosition ?? null,
+    technicalIndicators?.rsi14 ?? null,
+  );
+  if (costBasis.signalDelta !== 0) {
+    signalStrength += costBasis.signalDelta;
+    reasons.push(costBasis.reason);
   }
 
   // Factor 3: Position P&L (weight ~20%)
@@ -987,7 +1149,8 @@ export async function runDecisions(): Promise<{ decisions: Decision[]; trades: T
         news,
         quote,
         techIndicators,
-        riskCheck
+        riskCheck,
+        context.recentPriceHistory
       );
       decision.reasoning = `[Fallback due to DeepSeek failure] ${decision.reasoning}`;
       decision.marketData = {
