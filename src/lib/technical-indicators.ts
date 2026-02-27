@@ -55,6 +55,7 @@ export interface TechnicalIndicators {
   // Volume
   volumeRatio: number | null;          // Recent vol / average vol
   volumeTrend: "increasing" | "decreasing" | "stable" | null;
+  suddenVolumeSpike: boolean | null;  // 30-min volume >= 2x historical avg (放量)
 
   // Momentum
   roc5: number | null;   // Rate of Change 5 periods
@@ -268,17 +269,31 @@ export async function computeTechnicalIndicators(
   }
   const dailyReturnStdDev = returns.length >= 5 ? stdDev(returns) * 100 : null; // as %
 
-  // ─── Volume ───
+  // ─── Volume (30-min sliding window for spike detection) ───
   let volumeRatio: number | null = null;
   let volumeTrend: TechnicalIndicators["volumeTrend"] = null;
+  let suddenVolumeSpike: boolean | null = null;
   if (volumes.length >= 5) {
-    const recentVol = volumes.slice(0, 5).reduce((s, v) => s + v, 0) / 5;
     const avgVol = volumes.reduce((s, v) => s + v, 0) / volumes.length;
+
+    // Use 30-minute sliding window for recent volume when timestamps available
+    const thirtyMinAgo = Date.now() - 30 * 60 * 1000;
+    const recentVolumes = (rows as PriceRow[])
+      .filter((r) => new Date(r.created_at).getTime() >= thirtyMinAgo)
+      .map((r) => toNum(r.average_volume))
+      .filter((v) => v > 0);
+
+    const recentVol = recentVolumes.length >= 2
+      ? recentVolumes.reduce((s, v) => s + v, 0) / recentVolumes.length
+      : volumes.slice(0, 5).reduce((s, v) => s + v, 0) / 5;
+
     if (avgVol > 0) {
       volumeRatio = recentVol / avgVol;
       if (volumeRatio > 1.3) volumeTrend = "increasing";
       else if (volumeRatio < 0.7) volumeTrend = "decreasing";
       else volumeTrend = "stable";
+      // Sudden volume spike: 30-min window volume >= 2x historical average (放量)
+      suddenVolumeSpike = recentVolumes.length >= 2 && volumeRatio >= 2.0;
     }
   }
 
@@ -393,7 +408,7 @@ export async function computeTechnicalIndicators(
     macdLine, macdSignal: macdSignalLine, macdHistogram, macdBullish,
     bollingerUpper, bollingerMiddle, bollingerLower, bollingerPosition,
     atr14, volatilityPct, dailyReturnStdDev,
-    volumeRatio, volumeTrend,
+    volumeRatio, volumeTrend, suddenVolumeSpike,
     roc5, roc20,
     consecutiveUp, consecutiveDown,
     distanceFrom52wHigh, distanceFrom52wLow,
@@ -449,7 +464,9 @@ export function formatIndicatorsForPrompt(ti: TechnicalIndicators, price: number
 
   // Volume
   if (ti.volumeRatio !== null) {
-    lines.push(`Volume: Ratio=${ti.volumeRatio.toFixed(2)}x avg — ${ti.volumeTrend}`);
+    let volLine = `Volume: Ratio=${ti.volumeRatio.toFixed(2)}x avg — ${ti.volumeTrend}`;
+    if (ti.suddenVolumeSpike) volLine += " ⚠️ SUDDEN VOLUME SPIKE (放量)";
+    lines.push(volLine);
   }
 
   // Momentum
@@ -486,7 +503,7 @@ function emptyIndicators(
     macdLine: null, macdSignal: null, macdHistogram: null, macdBullish: null,
     bollingerUpper: null, bollingerMiddle: null, bollingerLower: null, bollingerPosition: null,
     atr14: null, volatilityPct: null, dailyReturnStdDev: null,
-    volumeRatio: null, volumeTrend: null,
+    volumeRatio: null, volumeTrend: null, suddenVolumeSpike: null,
     roc5: null, roc20: null,
     consecutiveUp: 0, consecutiveDown: 0,
     distanceFrom52wHigh: high52 && high52 > 0 ? ((price - high52) / high52) * 100 : null,

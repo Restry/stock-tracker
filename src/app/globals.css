@@ -78,6 +78,16 @@ body {
   background-color: rgba(88, 166, 255, 0.04);
 }
 
+/* Price flash on update */
+@keyframes price-flash {
+  0% { background-color: rgba(88, 166, 255, 0.25); }
+  100% { background-color: transparent; }
+}
+.price-flash {
+  animation: price-flash 1.2s ease-out;
+  border-radius: 6px;
+}
+
 /* Custom selection color */
 ::selection {
   background-color: rgba(88, 166, 255, 0.3);

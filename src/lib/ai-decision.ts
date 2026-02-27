@@ -83,6 +83,7 @@ interface DecisionContext {
     volatilityPct: number | null;
     volumeRatio: number | null;
     volumeTrend: string | null;
+    suddenVolumeSpike: boolean | null;
     roc5: number | null;
     roc20: number | null;
     consecutiveUp: number;
@@ -548,6 +549,7 @@ async function buildDecisionContext(
       volatilityPct: ti.volatilityPct,
       volumeRatio: ti.volumeRatio,
       volumeTrend: ti.volumeTrend,
+      suddenVolumeSpike: ti.suddenVolumeSpike,
       roc5: ti.roc5,
       roc20: ti.roc20,
       consecutiveUp: ti.consecutiveUp,
@@ -621,6 +623,7 @@ async function decideWithDeepSeek(context: DecisionContext): Promise<Decision> {
   if (tBuy.triggered) intradayNotes.push(`T-BUY SIGNAL ACTIVE: ${tBuy.reason}`);
   if (profitTake.triggered) intradayNotes.push(`PROFIT-TAKING SIGNAL: ${profitTake.reason}`);
   if (costBasis.signalDelta !== 0) intradayNotes.push(`COST BASIS PROTECTION: ${costBasis.reason}`);
+  if (context.technicalIndicators.suddenVolumeSpike) intradayNotes.push("SUDDEN VOLUME SPIKE: 30-min volume >= 2x historical average (放量)");
 
   const prevDecStr = context.previousDecisions.length > 0
     ? `Recent decisions: ${context.previousDecisions.map(d => `${d.action}(${d.confidence}%) at ${d.createdAt}`).join(", ")}. Avoid unnecessary signal flipping.`
@@ -639,6 +642,7 @@ INTRADAY T-TRADING RULES (做 T):
 - If intraday gain from daily low exceeds 3%, recommend partial SELL to lock in the swing profit and reduce holding cost.
 - Always prioritize reducing cost_price for existing holdings: favor buying below cost (to average down) and selling above cost (to lower cost basis).
 - T-trading signals should increase your confidence in the recommended action.
+- If SUDDEN VOLUME SPIKE is detected (30-min volume >= 2x average), this confirms the trend direction. Rising price + volume spike = strong BUY signal. Falling price + volume spike = strong SELL signal.
 
 RISK RULES (MANDATORY — override other signals):
 ${riskNotes.length > 0 ? riskNotes.map(n => `- ${n}`).join("\n") : "- No risk overrides active."}
@@ -832,6 +836,19 @@ function analyzeSignals(
       } else if (technicalIndicators.roc5 < 0 && technicalIndicators.volumeRatio > 1.3) {
         signalStrength -= 6;
         reasons.push("放量下跌警告");
+      }
+    }
+
+    // Sudden volume spike amplifies trend signal (放量)
+    if (technicalIndicators.suddenVolumeSpike) {
+      if (technicalIndicators.roc5 !== null && technicalIndicators.roc5 > 0) {
+        signalStrength += 10;
+        reasons.push("突然放量上涨，趋势确认");
+      } else if (technicalIndicators.roc5 !== null && technicalIndicators.roc5 < 0) {
+        signalStrength -= 10;
+        reasons.push("突然放量下跌，风险加剧");
+      } else {
+        reasons.push("突然放量，关注方向突破");
       }
     }
   }

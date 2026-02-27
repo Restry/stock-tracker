@@ -53,8 +53,9 @@ function isAnyMarketOpen(symbols: string[]): boolean {
   return symbols.length > 0 && symbols.some(isMarketOpenForSymbol);
 }
 
-let schedulerTimer: ReturnType<typeof setInterval> | null = null;
+let schedulerTimer: ReturnType<typeof setTimeout> | null = null;
 let isRunning = false;
+let cachedSymbols: string[] = [];
 
 async function runTradingCycle(): Promise<void> {
   if (isRunning) {
@@ -68,7 +69,7 @@ async function runTradingCycle(): Promise<void> {
     // Check if any monitored market is open
     const settings = await getSymbolSettings(true);
     const symbols = settings.map((s) => s.symbol);
-    
+    cachedSymbols = symbols;
     if (!isAnyMarketOpen(symbols)) {
       console.log(`[Scheduler] No markets open. Monitored: ${symbols.join(", ")}`);
       return;
@@ -106,6 +107,49 @@ async function runTradingCycle(): Promise<void> {
   }
 }
 
+function isInHighVolatilityZone(symbols: string[]): boolean {
+  const marketOpens: Array<{ suffixes: string[]; tz: string; openMin: number }> = [
+    { suffixes: [".HK"], tz: "Asia/Hong_Kong", openMin: 570 },
+    { suffixes: [".SS", ".SZ", ".SH"], tz: "Asia/Shanghai", openMin: 570 },
+    { suffixes: [".T"], tz: "Asia/Tokyo", openMin: 540 },
+  ];
+
+  for (const symbol of symbols) {
+    let tz = "America/New_York";
+    let openMin = 570; // 09:30
+    for (const m of marketOpens) {
+      if (m.suffixes.some((s) => symbol.endsWith(s))) {
+        tz = m.tz;
+        openMin = m.openMin;
+        break;
+      }
+    }
+    const c = clockInTimezone(tz);
+    if (isWeekday(c.weekday) && c.minutes >= openMin && c.minutes < openMin + 30) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function scheduleNextCycle(): void {
+  const defaultMin = Math.max(1, parseInt(process.env.SCHEDULER_INTERVAL_MIN || "5", 10));
+  const inHighVol = isInHighVolatilityZone(cachedSymbols);
+  const intervalMin = inHighVol ? 1 : defaultMin;
+  const intervalMs = intervalMin * 60 * 1000;
+
+  if (inHighVol) {
+    console.log(`[Scheduler] High volatility zone — using 1-minute interval.`);
+  }
+
+  schedulerTimer = setTimeout(async () => {
+    await runTradingCycle();
+    if (schedulerTimer !== null) {
+      scheduleNextCycle();
+    }
+  }, intervalMs);
+}
+
 export function startScheduler(): void {
   if (schedulerTimer) {
     console.log("[Scheduler] Already running.");
@@ -113,26 +157,22 @@ export function startScheduler(): void {
   }
 
   const intervalMin = Math.max(1, parseInt(process.env.SCHEDULER_INTERVAL_MIN || "5", 10));
-  const intervalMs = intervalMin * 60 * 1000;
+  console.log(`[Scheduler] Starting with ${intervalMin}-minute default interval (1-minute in high-volatility zones).`);
 
-  console.log(`[Scheduler] Starting with ${intervalMin}-minute interval.`);
-
-  // Run once on startup (with a short delay to let the server fully start)
-  setTimeout(() => {
-    runTradingCycle();
+  // Run once on startup, then schedule dynamically
+  schedulerTimer = setTimeout(async () => {
+    await runTradingCycle();
+    if (schedulerTimer !== null) {
+      scheduleNextCycle();
+    }
   }, 5000);
 
-  // Then run on interval
-  schedulerTimer = setInterval(() => {
-    runTradingCycle();
-  }, intervalMs);
-
-  console.log(`[Scheduler] Active. Next cycle in ${intervalMin} minutes.`);
+  console.log(`[Scheduler] Active.`);
 }
 
 export function stopScheduler(): void {
   if (schedulerTimer) {
-    clearInterval(schedulerTimer);
+    clearTimeout(schedulerTimer);
     schedulerTimer = null;
     console.log("[Scheduler] Stopped.");
   }
