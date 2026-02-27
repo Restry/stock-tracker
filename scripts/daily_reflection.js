@@ -5,7 +5,12 @@ function appBaseUrl() {
 }
 
 async function fetchJson(url) {
-  const res = await fetch(url, { signal: AbortSignal.timeout(15000) });
+  const res = await fetch(url, {
+    signal: AbortSignal.timeout(15000),
+    headers: {
+      token: "stock2026",
+    },
+  });
   if (!res.ok) {
     throw new Error(`HTTP ${res.status} from ${url}`);
   }

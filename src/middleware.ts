@@ -16,10 +16,12 @@ export function middleware(request: NextRequest) {
   // Check auth for all other routes
   const cookie = request.cookies.get(COOKIE_NAME);
   const authHeader = request.headers.get("authorization");
+  const tokenHeader = request.headers.get("token");
 
   if (
     cookie?.value === AUTH_PASSWORD ||
-    authHeader === `Bearer ${AUTH_PASSWORD}`
+    authHeader === `Bearer ${AUTH_PASSWORD}` ||
+    tokenHeader === AUTH_PASSWORD
   ) {
     return NextResponse.next();
   }
