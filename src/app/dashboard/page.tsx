@@ -164,7 +164,7 @@ export default function DashboardPage() {
   const [trades, setTrades] = useState<Trade[]>([]);
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState("");
-  const [activeTab, setActiveTab] = useState<"decisions" | "trades" | "history" | "logs">("decisions");
+  const [activeTab, setActiveTab] = useState<"decisions" | "history" | "logs">("decisions");
   const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
   const [health, setHealth] = useState<HealthStatus | null>(null);
   const [techIndicators, setTechIndicators] = useState<TechIndicators | null>(null);
@@ -173,6 +173,9 @@ export default function DashboardPage() {
   const [showSettings, setShowSettings] = useState(false);
   const [priceFlash, setPriceFlash] = useState(false);
   const priceFlashKey = useRef(0);
+  const [refreshCountdown, setRefreshCountdown] = useState(30);
+  const [dataAge, setDataAge] = useState(0);
+  const [editingPosition, setEditingPosition] = useState(false);
 
   const fetchHealth = useCallback(async () => {
     try {
@@ -263,10 +266,16 @@ export default function DashboardPage() {
     const indicatorTimer = setInterval(() => {
       fetchIndicators();
       fetchPriceHistory();
+      setRefreshCountdown(30);
     }, 30000);
+    const countdownTimer = setInterval(() => {
+      setRefreshCountdown(c => Math.max(0, c - 1));
+      setDataAge(a => a + 1);
+    }, 1000);
     return () => {
       clearInterval(healthTimer);
       clearInterval(indicatorTimer);
+      clearInterval(countdownTimer);
     };
   }, [fetchHealth, fetchIndicators, fetchPriceHistory]);
 
@@ -286,7 +295,22 @@ export default function DashboardPage() {
     setActionLoading("");
   }
 
-  const totalPnl = holdings.reduce((sum, h) => sum + (h.pnl || 0), 0);
+  async function savePosition(symbol: string, shares: number, costPrice: number) {
+    try {
+      const res = await fetch("/api/holdings", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ symbol, shares, cost_price: costPrice }),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      setEditingPosition(false);
+      await fetchData();
+    } catch (err) {
+      console.error("Failed to save position:", err);
+    }
+  }
+
+  const totalPnl= holdings.reduce((sum, h) => sum + (h.pnl || 0), 0);
   const totalCost = holdings.reduce((sum, h) => sum + (h.costBasis || 0), 0);
   const totalPnlPct = totalCost > 0 ? (totalPnl / totalCost) * 100 : 0;
 
@@ -370,9 +394,12 @@ export default function DashboardPage() {
 
           <div className="flex items-center gap-1.5 md:gap-2">
             {lastUpdate && (
-              <span className="text-[11px] text-muted-dark mr-1 md:mr-3 font-mono hidden sm:inline-flex items-center">
-                <span className="inline-block w-1.5 h-1.5 rounded-full bg-profit mr-1.5 pulse-dot" />
-                {lastUpdate.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false })}
+              <span className="text-[11px] text-muted-dark mr-1 md:mr-3 font-mono hidden sm:inline-flex items-center gap-2">
+                <span className="inline-flex items-center">
+                  <span className="inline-block w-1.5 h-1.5 rounded-full bg-profit mr-1.5 pulse-dot" />
+                  {lastUpdate.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false })}
+                </span>
+                <span className="text-muted-dark/60">{refreshCountdown}s</span>
               </span>
             )}
             <SystemLiveBadge health={health} />
@@ -473,22 +500,38 @@ export default function DashboardPage() {
             <div className="lg:col-span-4 space-y-4">
               {/* Position Card */}
               <div className="bg-surface border border-border rounded-2xl p-4 md:p-5">
-                <h3 className="text-xs font-bold text-muted-dark uppercase tracking-wider mb-3">持仓信息</h3>
-                <div className="space-y-2.5">
-                  <InfoRow label="持仓" value={`${monitoring.shares.toLocaleString()} 股`} />
-                  <InfoRow label="成本价" value={fmtCcy(monitoring.costPrice, monitoring.currency)} />
-                  <InfoRow label="现价" value={fmtCcy(monitoring.currentPrice, monitoring.currency)} />
-                  <div className="border-t border-border my-2" />
-                  <InfoRow label="总成本" value={fmtCcy(monitoring.totalCost, monitoring.currency)} />
-                  <InfoRow label="市值" value={fmtCcy(monitoring.marketValue, monitoring.currency)} />
-                  <div className="flex justify-between text-sm font-semibold">
-                    <span className="text-muted">盈亏</span>
-                    <span className={`font-mono ${monitoring.pnl >= 0 ? "text-profit" : "text-loss"}`}>
-                      {monitoring.pnl >= 0 ? "+" : ""}{fmtCcy(monitoring.pnl, monitoring.currency)}
-                      <span className="text-xs ml-1 opacity-75">({monitoring.pnlPct >= 0 ? "+" : ""}{monitoring.pnlPct.toFixed(2)}%)</span>
-                    </span>
-                  </div>
+                <div className="flex items-center justify-between mb-3">
+                  <h3 className="text-xs font-bold text-muted-dark uppercase tracking-wider">持仓信息</h3>
+                  <button onClick={() => setEditingPosition(!editingPosition)} className="text-[10px] text-accent hover:text-accent-bright transition-colors">
+                    {editingPosition ? "取消" : "✏️ 编辑"}
+                  </button>
                 </div>
+                {editingPosition ? (
+                  <PositionEditor
+                    symbol={PRIMARY_SYMBOL}
+                    currentShares={monitoring.shares}
+                    currentCost={monitoring.costPrice}
+                    currency={monitoring.currency}
+                    onSave={(shares, cost) => savePosition(PRIMARY_SYMBOL, shares, cost)}
+                    onCancel={() => setEditingPosition(false)}
+                  />
+                ) : (
+                  <div className="space-y-2.5">
+                    <InfoRow label="持仓" value={`${monitoring.shares.toLocaleString()} 股`} />
+                    <InfoRow label="成本价" value={fmtCcy(monitoring.costPrice, monitoring.currency)} />
+                    <InfoRow label="现价" value={fmtCcy(monitoring.currentPrice, monitoring.currency)} />
+                    <div className="border-t border-border my-2" />
+                    <InfoRow label="总成本" value={fmtCcy(monitoring.totalCost, monitoring.currency)} />
+                    <InfoRow label="市值" value={fmtCcy(monitoring.marketValue, monitoring.currency)} />
+                    <div className="flex justify-between text-sm font-semibold">
+                      <span className="text-muted">盈亏</span>
+                      <span className={`font-mono ${monitoring.pnl >= 0 ? "text-profit" : "text-loss"}`}>
+                        {monitoring.pnl >= 0 ? "+" : ""}{fmtCcy(monitoring.pnl, monitoring.currency)}
+                        <span className="text-xs ml-1 opacity-75">({monitoring.pnlPct >= 0 ? "+" : ""}{monitoring.pnlPct.toFixed(2)}%)</span>
+                      </span>
+                    </div>
+                  </div>
+                )}
               </div>
 
               {/* Break-even Card */}
@@ -552,25 +595,24 @@ export default function DashboardPage() {
           <MetricCard label="AI 决策" value={String(decisions.length)} subtitle={decisions[0] ? `最新: ${decisions[0].action} ${decisions[0].symbol}` : "暂无决策"} icon="🧠" />
         </div>
 
-        {/* Holdings Table */}
-        <HoldingsTable holdings={holdings} />
-
-        {/* Multi-tab Panel: Decisions / Trades / History / Logs */}
+        {/* Multi-tab Panel: Decisions / History / Logs */}
         <section className="bg-surface border border-border rounded-2xl overflow-hidden">
           <div className="flex items-center border-b border-border overflow-x-auto">
-            {(["decisions", "trades", "history", "logs"] as const).map(tab => (
+            {(["decisions", "history", "logs"] as const).map(tab => (
               <button key={tab} onClick={() => setActiveTab(tab)} className={`px-4 md:px-5 py-3.5 text-sm font-medium transition-colors whitespace-nowrap ${activeTab === tab ? "text-accent border-b-2 border-accent -mb-px" : "text-muted-dark hover:text-muted"}`}>
-                {tab === "decisions" ? "AI 决策" : tab === "trades" ? "交易记录" : tab === "history" ? "价格历史" : "运行日志"}
+                {tab === "decisions" ? "AI 决策" : tab === "history" ? "价格历史" : "运行日志"}
               </button>
             ))}
           </div>
           <div className="p-3 md:p-5">
-            {activeTab === "decisions" && <DecisionsList decisions={decisions} />}
-            {activeTab === "trades" && <TradesList trades={trades} />}
+            {activeTab === "decisions" && <DecisionsList decisions={decisions} trades={trades} />}
             {activeTab === "history" && <HistoryPanel />}
             {activeTab === "logs" && <LogsPanel />}
           </div>
         </section>
+
+        {/* Holdings Table */}
+        <HoldingsTable holdings={holdings} onEdit={(symbol, shares, cost) => savePosition(symbol, shares, cost)} />
       </main>
 
       <footer className="border-t border-border mt-8">
@@ -917,7 +959,26 @@ function LoadingSpinner() {
   );
 }
 
-function HoldingsTable({ holdings }: { holdings: Holding[] }) {
+function HoldingsTable({ holdings, onEdit }: { holdings: Holding[]; onEdit: (symbol: string, shares: number, cost: number) => void }) {
+  const [editSymbol, setEditSymbol] = useState<string | null>(null);
+  const [editShares, setEditShares] = useState("");
+  const [editCost, setEditCost] = useState("");
+
+  function startEdit(h: Holding) {
+    setEditSymbol(h.symbol);
+    setEditShares(h.shares);
+    setEditCost(h.cost_price || "");
+  }
+
+  function handleSave() {
+    if (!editSymbol) return;
+    const s = parseFloat(editShares);
+    const c = parseFloat(editCost);
+    if (isNaN(s) || s < 0 || isNaN(c) || c < 0) return;
+    onEdit(editSymbol, s, c);
+    setEditSymbol(null);
+  }
+
   return (
     <section className="bg-surface border border-border rounded-2xl overflow-hidden">
       <div className="px-4 md:px-5 py-3 md:py-4 border-b border-border flex items-center justify-between">
@@ -935,7 +996,7 @@ function HoldingsTable({ holdings }: { holdings: Holding[] }) {
               <th className="text-right px-5 py-3 font-medium">成本</th>
               <th className="text-right px-5 py-3 font-medium">市值</th>
               <th className="text-right px-5 py-3 font-medium">盈亏</th>
-              <th className="text-right px-5 py-3 font-medium">更新</th>
+              <th className="text-right px-5 py-3 font-medium">操作</th>
             </tr>
           </thead>
           <tbody>
@@ -950,9 +1011,17 @@ function HoldingsTable({ holdings }: { holdings: Holding[] }) {
                   </div>
                 </td>
                 <td className="px-5 py-3.5 text-muted">{h.name}</td>
-                <td className="px-5 py-3.5 text-right font-mono">{parseFloat(h.shares).toLocaleString()}</td>
+                <td className="px-5 py-3.5 text-right font-mono">
+                  {editSymbol === h.symbol ? (
+                    <input value={editShares} onChange={e => setEditShares(e.target.value)} className="w-20 bg-surface-elevated border border-accent/40 rounded px-2 py-1 text-xs font-mono text-right" />
+                  ) : parseFloat(h.shares).toLocaleString()}
+                </td>
                 <td className="px-5 py-3.5 text-right font-mono">{h.current_price ? fmtCcy(parseFloat(h.current_price), h.price_currency) : <span className="text-muted-dark">—</span>}</td>
-                <td className="px-5 py-3.5 text-right font-mono">{h.cost_price ? fmtCcy(parseFloat(h.cost_price), h.price_currency) : <span className="text-muted-dark">—</span>}</td>
+                <td className="px-5 py-3.5 text-right font-mono">
+                  {editSymbol === h.symbol ? (
+                    <input value={editCost} onChange={e => setEditCost(e.target.value)} className="w-20 bg-surface-elevated border border-accent/40 rounded px-2 py-1 text-xs font-mono text-right" />
+                  ) : h.cost_price ? fmtCcy(parseFloat(h.cost_price), h.price_currency) : <span className="text-muted-dark">—</span>}
+                </td>
                 <td className="px-5 py-3.5 text-right font-mono font-medium">{h.marketValue > 0 ? fmtCcy(h.marketValue, "USD") : <span className="text-muted-dark">—</span>}</td>
                 <td className="px-5 py-3.5 text-right">
                   {h.pnl != null ? (
@@ -962,7 +1031,16 @@ function HoldingsTable({ holdings }: { holdings: Holding[] }) {
                     </div>
                   ) : <span className="text-muted-dark">—</span>}
                 </td>
-                <td className="px-5 py-3.5 text-right text-muted-dark text-xs font-mono">{h.updated_at ? fmtTime(h.updated_at) : "—"}</td>
+                <td className="px-5 py-3.5 text-right">
+                  {editSymbol === h.symbol ? (
+                    <div className="flex items-center justify-end gap-1">
+                      <button onClick={handleSave} className="text-[10px] px-2 py-1 rounded bg-accent text-background font-medium">保存</button>
+                      <button onClick={() => setEditSymbol(null)} className="text-[10px] px-2 py-1 rounded bg-surface-elevated text-muted border border-border">取消</button>
+                    </div>
+                  ) : (
+                    <button onClick={() => startEdit(h)} className="text-[10px] text-accent hover:text-accent-bright">✏️ 编辑</button>
+                  )}
+                </td>
               </tr>
             ))}
           </tbody>
@@ -982,18 +1060,30 @@ function HoldingsTable({ holdings }: { holdings: Holding[] }) {
                   <span className="block text-[11px] text-muted truncate max-w-[140px]">{h.name}</span>
                 </div>
               </div>
-              {h.pnl != null ? (
-                <div className={`text-right font-mono ${h.pnl >= 0 ? "text-profit" : "text-loss"}`}>
-                  <span className="text-sm font-medium">{h.pnl >= 0 ? "+" : ""}{fmtCcy(h.pnl, "USD")}</span>
-                  <span className="block text-[11px] opacity-75">{h.pnlPct! >= 0 ? "+" : ""}{h.pnlPct!.toFixed(2)}%</span>
-                </div>
-              ) : <span className="text-muted-dark text-sm">—</span>}
+              <div className="flex items-center gap-2">
+                {h.pnl != null ? (
+                  <div className={`text-right font-mono ${h.pnl >= 0 ? "text-profit" : "text-loss"}`}>
+                    <span className="text-sm font-medium">{h.pnl >= 0 ? "+" : ""}{fmtCcy(h.pnl, "USD")}</span>
+                    <span className="block text-[11px] opacity-75">{h.pnlPct! >= 0 ? "+" : ""}{h.pnlPct!.toFixed(2)}%</span>
+                  </div>
+                ) : <span className="text-muted-dark text-sm">—</span>}
+                <button onClick={() => startEdit(h)} className="text-xs text-accent ml-1">✏️</button>
+              </div>
             </div>
-            <div className="flex items-center justify-between text-xs text-muted-dark font-mono">
-              <span>{parseFloat(h.shares).toLocaleString()} 股</span>
-              <span>{h.current_price ? fmtCcy(parseFloat(h.current_price), h.price_currency) : "—"}</span>
-              <span>{h.marketValue > 0 ? fmtCcy(h.marketValue, "USD") : "—"}</span>
-            </div>
+            {editSymbol === h.symbol ? (
+              <div className="flex items-center gap-2 mt-2">
+                <input value={editShares} onChange={e => setEditShares(e.target.value)} placeholder="股数" className="flex-1 bg-surface-elevated border border-accent/40 rounded px-2 py-1.5 text-xs font-mono" />
+                <input value={editCost} onChange={e => setEditCost(e.target.value)} placeholder="成本" className="flex-1 bg-surface-elevated border border-accent/40 rounded px-2 py-1.5 text-xs font-mono" />
+                <button onClick={handleSave} className="text-[10px] px-2 py-1.5 rounded bg-accent text-background font-medium">保存</button>
+                <button onClick={() => setEditSymbol(null)} className="text-[10px] px-2 py-1.5 rounded bg-surface-elevated text-muted border border-border">取消</button>
+              </div>
+            ) : (
+              <div className="flex items-center justify-between text-xs text-muted-dark font-mono">
+                <span>{parseFloat(h.shares).toLocaleString()} 股</span>
+                <span>{h.current_price ? fmtCcy(parseFloat(h.current_price), h.price_currency) : "—"}</span>
+                <span>{h.marketValue > 0 ? fmtCcy(h.marketValue, "USD") : "—"}</span>
+              </div>
+            )}
           </div>
         ))}
       </div>
@@ -1006,6 +1096,43 @@ function InfoRow({ label, value, bold }: { label: string; value: string; bold?: 
     <div className="flex justify-between text-sm">
       <span className="text-muted">{label}</span>
       <span className={`font-mono ${bold ? "font-bold" : "font-semibold"}`}>{value}</span>
+    </div>
+  );
+}
+
+function PositionEditor({ symbol, currentShares, currentCost, currency, onSave, onCancel }: {
+  symbol: string; currentShares: number; currentCost: number; currency: string;
+  onSave: (shares: number, cost: number) => void; onCancel: () => void;
+}) {
+  const [shares, setShares] = useState(String(currentShares));
+  const [cost, setCost] = useState(String(currentCost));
+  const [saving, setSaving] = useState(false);
+
+  async function handleSave() {
+    const s = parseFloat(shares);
+    const c = parseFloat(cost);
+    if (isNaN(s) || s < 0 || isNaN(c) || c < 0) return;
+    setSaving(true);
+    await onSave(s, c);
+    setSaving(false);
+  }
+
+  return (
+    <div className="space-y-3">
+      <div className="space-y-2">
+        <div>
+          <label className="text-[11px] text-muted-dark">持仓数量</label>
+          <input value={shares} onChange={e => setShares(e.target.value)} className="w-full mt-1 bg-surface-elevated border border-border rounded-lg px-3 py-2 text-sm font-mono focus:border-accent focus:outline-none" />
+        </div>
+        <div>
+          <label className="text-[11px] text-muted-dark">成本价 ({currency})</label>
+          <input value={cost} onChange={e => setCost(e.target.value)} className="w-full mt-1 bg-surface-elevated border border-border rounded-lg px-3 py-2 text-sm font-mono focus:border-accent focus:outline-none" />
+        </div>
+      </div>
+      <div className="flex gap-2">
+        <button onClick={handleSave} disabled={saving} className="flex-1 px-3 py-2 rounded-lg text-xs font-medium bg-accent text-background">{saving ? "保存中..." : "保存"}</button>
+        <button onClick={onCancel} className="px-3 py-2 rounded-lg text-xs font-medium bg-surface-elevated text-muted border border-border">取消</button>
+      </div>
     </div>
   );
 }
@@ -1035,41 +1162,50 @@ function IndCard({ label, value, signal, sType }: { label: string; value: string
   );
 }
 
-function DecisionsList({ decisions }: { decisions: Decision[] }) {
-  if (decisions.length === 0) return <div className="py-8 text-center text-muted-dark">暂无 AI 决策</div>;
+function DecisionsList({ decisions, trades }: { decisions: Decision[]; trades: Trade[] }) {
+  // Merge decisions and trades into a combined timeline sorted by date desc
+  const timeline = useMemo(() => {
+    const items: Array<{ type: "decision"; data: Decision; time: number } | { type: "trade"; data: Trade; time: number }> = [];
+    decisions.forEach(d => items.push({ type: "decision", data: d, time: new Date(d.created_at).getTime() }));
+    trades.forEach(t => items.push({ type: "trade", data: t, time: new Date(t.created_at).getTime() }));
+    return items.sort((a, b) => b.time - a.time);
+  }, [decisions, trades]);
+
+  if (timeline.length === 0) return <div className="py-8 text-center text-muted-dark">暂无 AI 决策</div>;
   return (
     <div className="space-y-3">
-      {decisions.map(d => (
-        <div key={d.id} className="bg-surface-elevated border border-border rounded-xl p-3 md:p-4">
-          <div className="flex items-center justify-between mb-2">
-            <div className="flex items-center gap-2">
-              <span className="font-mono font-bold text-accent">{d.symbol}</span>
-              <ActionBadge action={d.action} />
-              <span className="text-xs text-muted-dark">{d.confidence}% 置信度</span>
+      {timeline.map((item, i) => {
+        if (item.type === "decision") {
+          const d = item.data;
+          return (
+            <div key={`d-${d.id}`} className="bg-surface-elevated border border-border rounded-xl p-3 md:p-4">
+              <div className="flex items-center justify-between mb-2">
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-accent/10 text-accent font-medium">决策</span>
+                  <span className="font-mono font-bold text-accent">{d.symbol}</span>
+                  <ActionBadge action={d.action} />
+                  <span className="text-xs text-muted-dark">{d.confidence}% 置信度</span>
+                </div>
+                <span className="text-muted-dark text-[11px] font-mono">{fmtTime(d.created_at)}</span>
+              </div>
+              <p className="text-muted text-[13px] leading-relaxed">{d.reasoning}</p>
             </div>
-            <span className="text-muted-dark text-[11px] font-mono">{fmtTime(d.created_at)}</span>
-          </div>
-          <p className="text-muted text-[13px] leading-relaxed">{d.reasoning}</p>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function TradesList({ trades }: { trades: Trade[] }) {
-  if (trades.length === 0) return <div className="py-8 text-center text-muted-dark">暂无交易记录</div>;
-  return (
-    <div className="space-y-2">
-      {trades.map(t => (
-        <div key={t.id} className="bg-surface-elevated border border-border rounded-xl p-3 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <span className="font-mono font-bold text-accent">{t.symbol}</span>
-            <ActionBadge action={t.action} />
-            <span className="text-xs text-muted">{t.shares} 股 @ {fmtCcy(parseFloat(t.price), t.currency)}</span>
-          </div>
-          <span className="text-muted-dark text-[11px] font-mono">{fmtTime(t.created_at)}</span>
-        </div>
-      ))}
+          );
+        } else {
+          const t = item.data;
+          return (
+            <div key={`t-${t.id}`} className="bg-surface-elevated border border-border rounded-xl p-3 flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <span className="text-[10px] px-1.5 py-0.5 rounded bg-hold/10 text-hold font-medium">交易</span>
+                <span className="font-mono font-bold text-accent">{t.symbol}</span>
+                <ActionBadge action={t.action} />
+                <span className="text-xs text-muted">{t.shares} 股 @ {fmtCcy(parseFloat(t.price), t.currency)}</span>
+              </div>
+              <span className="text-muted-dark text-[11px] font-mono">{fmtTime(t.created_at)}</span>
+            </div>
+          );
+        }
+      })}
     </div>
   );
 }
@@ -1136,7 +1272,7 @@ function fmtCcy(value: number, currency: string): string {
 
 function fmtTime(dateStr: string): string {
   const d = new Date(dateStr);
-  return d.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", hour12: false });
+  return d.toLocaleString("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false });
 }
 
 function formatTimestamp(ts: string): string {

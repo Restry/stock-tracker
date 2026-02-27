@@ -1,5 +1,5 @@
-import { NextResponse } from "next/server";
-import pool from "@/lib/db";
+import { NextRequest, NextResponse } from "next/server";
+import pool, { toSqlVal } from "@/lib/db";
 import { convertToUsd } from "@/lib/prices";
 
 export async function GET() {
@@ -28,6 +28,35 @@ export async function GET() {
     });
 
     return NextResponse.json({ holdings: enriched, totalValueUsd });
+  } catch (error) {
+    return NextResponse.json({ error: String(error) }, { status: 500 });
+  }
+}
+
+export async function PATCH(req: NextRequest) {
+  try {
+    const body = await req.json();
+    const { symbol, shares, cost_price } = body as {
+      symbol?: string;
+      shares?: number;
+      cost_price?: number;
+    };
+    if (!symbol) {
+      return NextResponse.json({ error: "symbol is required" }, { status: 400 });
+    }
+
+    const sets: string[] = [];
+    if (shares != null) sets.push(`shares = ${toSqlVal(shares)}`);
+    if (cost_price != null) sets.push(`cost_price = ${toSqlVal(cost_price)}`);
+    if (sets.length === 0) {
+      return NextResponse.json({ error: "Nothing to update" }, { status: 400 });
+    }
+    sets.push("updated_at = NOW()");
+
+    await pool.query(
+      `UPDATE "st-holdings" SET ${sets.join(", ")} WHERE symbol = ${toSqlVal(symbol)}`
+    );
+    return NextResponse.json({ ok: true });
   } catch (error) {
     return NextResponse.json({ error: String(error) }, { status: 500 });
   }

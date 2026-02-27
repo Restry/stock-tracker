@@ -651,7 +651,7 @@ ${intradayNotes.length > 0 ? `ACTIVE INTRADAY SIGNALS:\n${intradayNotes.map(n =>
 
 ${prevDecStr}
 
-Keep reasoning concise (under 300 chars). Use the technical indicators summary provided to inform your analysis.`;
+Keep reasoning concise (under 300 chars). Use the technical indicators summary provided to inform your analysis. 请用中文输出reasoning字段。`;
 
   const userPrompt = `Trading decision for ${context.symbol} (${context.companyName}):
 
