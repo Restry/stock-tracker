@@ -1,20 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
-
-const AUTH_PASSWORD = "stock2026";
-const COOKIE_NAME = "st-auth";
+import { AUTH_PASSWORD, loginResponse } from "@/lib/auth";
 
 export async function POST(request: NextRequest) {
   const body = await request.json();
 
   if (body.password === AUTH_PASSWORD) {
-    const response = NextResponse.json({ ok: true });
-    response.cookies.set(COOKIE_NAME, AUTH_PASSWORD, {
-      httpOnly: true,
-      sameSite: "lax",
-      path: "/",
-      maxAge: 60 * 60 * 24 * 30,
-    });
-    return response;
+    return loginResponse();
   }
 
   return NextResponse.json({ error: "Invalid password" }, { status: 401 });

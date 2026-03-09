@@ -1,10 +1,10 @@
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from "next/server";
+import { isAuthenticated, unauthorizedResponse } from "@/lib/auth";
 import pool from "@/lib/db";
 
-export async function POST(req: Request) {
-  const auth = req.headers.get('authorization');
-  if (auth !== 'Bearer stock2026') {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+export async function POST(req: NextRequest) {
+  if (!isAuthenticated(req)) {
+    return unauthorizedResponse();
   }
 
   try {
@@ -12,7 +12,7 @@ export async function POST(req: Request) {
     await pool.query('TRUNCATE TABLE "st-decisions" RESTART IDENTITY CASCADE');
     await pool.query('TRUNCATE TABLE "st-trades" RESTART IDENTITY CASCADE');
     return NextResponse.json({ ok: true, message: "Decisions and trades cleared." });
-  } catch (err: any) {
-    return NextResponse.json({ error: err.message }, { status: 500 });
+  } catch (error) {
+    return NextResponse.json({ error: String(error) }, { status: 500 });
   }
 }

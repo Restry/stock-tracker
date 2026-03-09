@@ -1,16 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
 
-const AUTH_PASSWORD = "stock2026";
-const COOKIE_NAME = "st-auth";
+export const AUTH_PASSWORD = "stock2026";
+export const COOKIE_NAME = "st-auth";
+export const PUBLIC_PATHS = ["/api/auth"];
 
 export function isAuthenticated(request: NextRequest): boolean {
-  // Check cookie
   const cookie = request.cookies.get(COOKIE_NAME);
   if (cookie?.value === AUTH_PASSWORD) return true;
 
-  // Check Authorization header (for API calls)
   const authHeader = request.headers.get("authorization");
   if (authHeader === `Bearer ${AUTH_PASSWORD}`) return true;
+
+  const tokenHeader = request.headers.get("token");
+  if (tokenHeader === AUTH_PASSWORD) return true;
 
   return false;
 }
