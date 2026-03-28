@@ -17,6 +17,11 @@ import {
   formatIndicatorsForPrompt,
   type TechnicalIndicators,
 } from "./technical-indicators";
+import {
+  evaluateEnsemble,
+  type StrategyContext,
+  type EnsembleResult,
+} from "./strategies";
 
 export interface Decision {
   symbol: string;
@@ -119,6 +124,7 @@ interface DecisionContext {
   newsSummary: string;
   strategyBias: string;
   technicalSummary: string;
+  ensembleResult: EnsembleResult | null;
 }
 
 interface DeepSeekDecisionPayload {
@@ -556,6 +562,33 @@ async function buildDecisionContext(
   // Previous decisions for continuity
   const previousDecisions = await getPreviousDecisions(symbol);
 
+  // Run multi-strategy ensemble
+  let ensembleResult: EnsembleResult | null = null;
+  try {
+    const stratCtx: StrategyContext = {
+      symbol,
+      currentPrice,
+      currency,
+      costPrice,
+      shares,
+      technicalIndicators: ti,
+      sentimentScore: sentiment.score,
+      positiveHits: sentiment.positiveHits,
+      negativeHits: sentiment.negativeHits,
+      recentPriceHistory,
+      quote: quote ? {
+        pe: quote.pe ?? null,
+        dividendYield: quote.dividendYield ?? null,
+        changePercent: quote.changePercent ? Number(quote.changePercent) : 0,
+        fiftyTwoWeekHigh: quote.fiftyTwoWeekHigh ?? null,
+        fiftyTwoWeekLow: quote.fiftyTwoWeekLow ?? null,
+      } : null,
+    };
+    ensembleResult = evaluateEnsemble(stratCtx);
+  } catch {
+    // Non-critical: ensemble failure should not block decisions
+  }
+
   return {
     symbol,
     companyName: getSymbolName(symbol),
@@ -614,6 +647,7 @@ async function buildDecisionContext(
       ? "Xiaomi continuous monitoring: output explicit BUY/SELL/HOLD every trading day."
       : "General multi-factor swing/position management.",
     technicalSummary,
+    ensembleResult,
   };
 }
 
@@ -713,6 +747,12 @@ SENTIMENT: Score=${context.sentiment.score.toFixed(2)}
 
 NEWS SUMMARY:
 ${context.newsSummary.substring(0, 1200)}
+
+${context.ensembleResult ? `STRATEGY ENSEMBLE (3-model consensus):
+- Aggregated direction: ${context.ensembleResult.direction} (${context.ensembleResult.action})
+- Ensemble confidence: ${context.ensembleResult.confidence}%
+- Signals: ${context.ensembleResult.signals.map(s => `${s.strategyName}=${s.direction > 0 ? "+" : ""}${s.direction}`).join(", ")}
+- Consider the ensemble as an additional input; your final judgment may differ.` : ""}
 
 STRATEGY: ${context.strategyBias}`;
 
@@ -1252,17 +1292,45 @@ export async function runDecisions(): Promise<{ decisions: Decision[]; trades: T
         riskCheck,
         context.recentPriceHistory
       );
+
+      // Blend ensemble signals into fallback decision
+      if (context.ensembleResult && context.ensembleResult.confidence > 0) {
+        const ens = context.ensembleResult;
+        // Weight: 60% rule-based, 40% ensemble
+        const ruleWeight = 0.6;
+        const ensWeight = 0.4;
+        // Convert rule-based action to direction
+        const ruleDirection = decision.action === "BUY" ? decision.confidence
+          : decision.action === "SELL" ? -decision.confidence : 0;
+        const blended = ruleDirection * ruleWeight + ens.direction * ensWeight;
+        const blendedConfidence = Math.round(decision.confidence * ruleWeight + ens.confidence * ensWeight);
+
+        // Re-derive action from blended direction
+        if (blended > 15) {
+          decision.action = "BUY";
+        } else if (blended < -15) {
+          decision.action = "SELL";
+        } else {
+          decision.action = "HOLD";
+        }
+        decision.confidence = clampConfidence(blendedConfidence);
+        decision.reasoning = `[Ensemble+Rules] ${decision.reasoning} || 策略共识: ${ens.signals.map(s => `${s.strategyName}=${s.direction > 0 ? "+" : ""}${s.direction}`).join(", ")}`;
+      }
+
       decision.reasoning = `[Fallback due to DeepSeek failure] ${decision.reasoning}`;
       decision.marketData = {
         ...decision.marketData,
         source: decisionSource,
         deepseekError: String(err).substring(0, 300),
+        ensembleDirection: context.ensembleResult?.direction ?? null,
+        ensembleAction: context.ensembleResult?.action ?? null,
       };
       await logAction("deepseek", `Fallback decision used for ${setting.symbol}`, {
         action: "DEEPSEEK_FALLBACK",
         status: "fail",
-        summary: `DeepSeek failed for ${setting.symbol}, used rules fallback.`,
+        summary: `DeepSeek failed for ${setting.symbol}, used rules+ensemble fallback.`,
         error: String(err).substring(0, 300),
+        ensembleDirection: context.ensembleResult?.direction ?? null,
       });
     }
 
@@ -1281,6 +1349,9 @@ export async function runDecisions(): Promise<{ decisions: Decision[]; trades: T
           autoTrade: setting.autoTrade,
           riskCheck,
           technicalScore: techIndicators?.technicalScore ?? null,
+          ensembleDirection: context.ensembleResult?.direction ?? null,
+          ensembleAction: context.ensembleResult?.action ?? null,
+          ensembleConfidence: context.ensembleResult?.confidence ?? null,
         }))}
       )`;
     await pool.query(decisionSql);
