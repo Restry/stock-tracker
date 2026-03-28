@@ -284,7 +284,7 @@ const NEGATION_PATTERNS = [
   /not\s+(?:a\s+)?concern/i, /no\s+downgrade/i,
 ];
 
-function computeSentimentScore(news: string): { score: number; positiveHits: string[]; negativeHits: string[] } {
+export function computeSentimentScore(news: string): { score: number; positiveHits: string[]; negativeHits: string[] } {
   const lower = news.toLowerCase();
 
   // Detect negation patterns (reduce false negatives)
@@ -356,7 +356,7 @@ interface IntradaySwingResult {
 }
 
 /** T-Buy: Bollinger lower band + RSI oversold → buy signal regardless of sentiment */
-function checkIntradaySwingSignal(
+export function checkIntradaySwingSignal(
   bollingerPosition: number | null,
   rsi14: number | null,
 ): IntradaySwingResult {
@@ -381,7 +381,7 @@ interface ProfitTakingResult {
 }
 
 /** Profit-taking: SELL if intraday gain > 3% from daily low to reduce cost basis */
-function checkProfitTaking(
+export function checkProfitTaking(
   currentPrice: number,
   recentPriceHistory: DecisionContext["recentPriceHistory"],
   shares: number,
@@ -412,7 +412,7 @@ interface CostBasisAdjustment {
 }
 
 /** Adjust signal strength to prioritize reducing cost_price for existing holdings */
-function applyCostBasisProtection(
+export function applyCostBasisProtection(
   currentPrice: number,
   costPrice: number | null,
   shares: number,
@@ -616,7 +616,7 @@ async function buildDecisionContext(
   };
 }
 
-function parseDeepSeekContent(content: string): DeepSeekDecisionPayload {
+export function parseDeepSeekContent(content: string): DeepSeekDecisionPayload {
   const jsonFence = content.match(/```json\s*([\s\S]*?)```/i);
   const raw = jsonFence?.[1]?.trim();
   if (raw) return JSON.parse(raw) as DeepSeekDecisionPayload;

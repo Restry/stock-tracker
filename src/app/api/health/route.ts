@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import pool, { logAction, toSqlVal } from "@/lib/db";
 import { getSymbolSettings } from "@/lib/trader-settings";
+import { getCircuitBreakerStatuses } from "@/lib/prices";
 
 const toNumber = (value: number | string | null | undefined): number => {
   if (typeof value === "number") return value;
@@ -124,6 +125,7 @@ export async function GET(req: NextRequest) {
       latestPriceAt,
       latestLogAt,
       monitoredSymbols,
+      circuitBreakers: getCircuitBreakerStatuses(),
     });
   } catch (error) {
     await logAction("health", "Trader health check failed", {

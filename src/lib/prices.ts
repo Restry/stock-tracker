@@ -1,5 +1,6 @@
 import pool, { toSqlVal, logAction } from "./db";
 import { getSymbolSettings } from "./trader-settings";
+import { getCircuit, getAllCircuitStatuses } from "./circuit-breaker";
 
 export interface Quote {
   symbol: string;
@@ -293,28 +294,52 @@ async function fetchTavilyQuote(symbol: string): Promise<Quote | null> {
   return null;
 }
 
-// Try multiple sources with fallback chain
+// ─── Circuit-breaker-wrapped fetch orchestrator ───
+// Each data source has its own circuit breaker so one degraded source
+// doesn't block the entire fallback chain.
+
+const SOURCES: Array<{
+  name: string;
+  fetch: (symbol: string) => Promise<Quote | null>;
+  /** Circuit breaker options (optional overrides) */
+  cbOpts?: { failureThreshold?: number; resetTimeoutMs?: number };
+}> = [
+  { name: "yahoo-v8", fetch: fetchYahooQuote },
+  { name: "yahoo-html", fetch: fetchYahooHtmlQuote, cbOpts: { failureThreshold: 4 } },
+  { name: "google-finance", fetch: fetchGoogleFinanceQuote },
+  { name: "tavily-price", fetch: fetchTavilyQuote, cbOpts: { failureThreshold: 3, resetTimeoutMs: 120_000 } },
+];
+
 async function fetchQuote(symbol: string): Promise<Quote | null> {
   console.log(`Fetching quote for ${symbol}...`);
 
-  // 1. Yahoo v8 chart API (primary)
-  let quote = await fetchYahooQuote(symbol);
-  if (quote) return quote;
+  for (const src of SOURCES) {
+    const cb = getCircuit(src.name, src.cbOpts);
+    if (!cb.isCallable()) {
+      console.log(`[circuit-breaker] ${src.name} circuit open, skipping for ${symbol}`);
+      continue;
+    }
 
-  // 2. Yahoo Finance HTML scraping (replaces deprecated v6 API)
-  quote = await fetchYahooHtmlQuote(symbol);
-  if (quote) return quote;
-
-  // 3. Google Finance (works for HK, US, CN, and other markets)
-  quote = await fetchGoogleFinanceQuote(symbol);
-  if (quote) return quote;
-
-  // 4. Tavily AI Fallback (The ultimate backup)
-  console.log(`Using Tavily AI fallback for ${symbol}`);
-  quote = await fetchTavilyQuote(symbol);
-  if (quote) return quote;
+    try {
+      const quote = await src.fetch(symbol);
+      if (quote) {
+        cb.recordSuccess();
+        return quote;
+      }
+      // null result = source responded but had no data — not a failure
+      // Still counts as "callable" (don't trip circuit for missing tickers)
+    } catch (err) {
+      cb.recordFailure();
+      console.warn(`[circuit-breaker] ${src.name} failure for ${symbol}:`, err);
+    }
+  }
 
   return null;
+}
+
+/** Expose circuit breaker health for the monitoring API */
+export function getCircuitBreakerStatuses() {
+  return getAllCircuitStatuses();
 }
 
 // --- Exchange Rate System ---
@@ -341,9 +366,16 @@ async function fetchExchangeRates(): Promise<Record<string, number>> {
     return ratesCache;
   }
 
+  const cb = getCircuit("yahoo-fx", { failureThreshold: 3, resetTimeoutMs: 120_000 });
+  if (!cb.isCallable()) {
+    console.log("[circuit-breaker] yahoo-fx circuit open, using cached/fallback rates");
+    return Object.keys(ratesCache).length > 0 ? ratesCache : { ...FALLBACK_RATES };
+  }
+
   // Try Yahoo Finance for exchange rates (free, no API key needed)
   const pairs = ["HKDUSD=X", "CNYUSD=X", "JPYUSD=X", "GBPUSD=X", "EURUSD=X"];
   const newRates: Record<string, number> = {};
+  let failures = 0;
 
   for (const pair of pairs) {
     try {
@@ -359,22 +391,28 @@ async function fetchExchangeRates(): Promise<Record<string, number>> {
           const currency = pair.replace("USD=X", "");
           newRates[currency] = rate;
         }
+      } else {
+        failures++;
       }
     } catch {
-      // Individual pair failure is OK, we have fallbacks
+      failures++;
     }
   }
 
   if (Object.keys(newRates).length > 0) {
+    cb.recordSuccess();
     // Merge with fallbacks for any missing currencies
     ratesCache = { ...FALLBACK_RATES, ...newRates };
     ratesCacheTime = now;
     console.log(`Exchange rates updated: ${JSON.stringify(ratesCache)}`);
-  } else if (Object.keys(ratesCache).length === 0) {
-    // First time and fetch failed - use fallbacks
-    ratesCache = { ...FALLBACK_RATES };
-    ratesCacheTime = now;
-    console.warn("Exchange rate fetch failed, using fallback rates");
+  } else {
+    cb.recordFailure();
+    if (Object.keys(ratesCache).length === 0) {
+      // First time and fetch failed - use fallbacks
+      ratesCache = { ...FALLBACK_RATES };
+      ratesCacheTime = now;
+      console.warn("Exchange rate fetch failed, using fallback rates");
+    }
   }
   // else: keep existing cache even if refresh failed
 
