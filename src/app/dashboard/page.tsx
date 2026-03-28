@@ -11,6 +11,7 @@ import { LogsPanel } from "./components/LogsPanel";
 import { HoldingsTable } from "./components/HoldingsTable";
 import { SettingsModal } from "./components/SettingsModal";
 import { BacktestPanel } from "./components/BacktestPanel";
+import { PortfolioOptimizerPanel } from "./components/PortfolioOptimizerPanel";
 
 export default function DashboardPage() {
   const data = useDashboardData();
@@ -73,9 +74,9 @@ export default function DashboardPage() {
         {/* Multi-tab Panel: Decisions / History / Logs */}
         <section className="bg-surface border border-border rounded-2xl overflow-hidden">
           <div className="flex items-center border-b border-border overflow-x-auto">
-            {(["decisions", "history", "backtest", "logs"] as const).map(tab => (
+            {(["decisions", "history", "backtest", "optimize", "logs"] as const).map(tab => (
               <button key={tab} onClick={() => data.setActiveTab(tab)} className={`px-4 md:px-5 py-3.5 text-sm font-medium transition-colors whitespace-nowrap ${data.activeTab === tab ? "text-accent border-b-2 border-accent -mb-px" : "text-muted-dark hover:text-muted"}`}>
-                {tab === "decisions" ? "AI 决策" : tab === "history" ? "价格历史" : tab === "backtest" ? "策略回测" : "运行日志"}
+                {tab === "decisions" ? "AI 决策" : tab === "history" ? "价格历史" : tab === "backtest" ? "策略回测" : tab === "optimize" ? "组合优化" : "运行日志"}
               </button>
             ))}
           </div>
@@ -83,6 +84,7 @@ export default function DashboardPage() {
             {data.activeTab === "decisions" && <DecisionsList decisions={data.decisions} trades={data.trades} />}
             {data.activeTab === "history" && <HistoryPanel />}
             {data.activeTab === "backtest" && <BacktestPanel />}
+            {data.activeTab === "optimize" && <PortfolioOptimizerPanel />}
             {data.activeTab === "logs" && <LogsPanel />}
           </div>
         </section>

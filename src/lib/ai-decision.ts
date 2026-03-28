@@ -11,6 +11,7 @@ import {
   notifyPriceAlert,
   notifyError,
 } from "./notifications";
+import { computePositionSize } from "./portfolio-optimizer";
 import {
   computeTechnicalIndicators,
   formatIndicatorsForPrompt,
@@ -1040,18 +1041,40 @@ async function executeSimulatedTrade(
 ): Promise<Trade | null> {
   if (decision.action === "HOLD") return null;
 
+  // Use portfolio-aware position sizing
   let tradeShares = 0;
-  if (decision.action === "BUY") {
-    if (decision.symbol === "MSFT") {
-      const targetUsd = 2900;
-      tradeShares = Math.floor(targetUsd / currentPrice);
-    } else {
-      tradeShares = Math.max(200, Math.floor((decision.confidence / 100) * 1000));
+  try {
+    const sizeRec = await computePositionSize(
+      decision.symbol,
+      decision.action as "BUY" | "SELL",
+      decision.confidence,
+      currentPrice,
+      currency,
+      currentShares,
+    );
+    tradeShares = sizeRec.shares;
+    if (tradeShares <= 0) {
+      await logAction("portfolio", `Position sizing blocked trade for ${decision.symbol}: ${sizeRec.reasoning}`, {
+        symbol: decision.symbol,
+        action: decision.action,
+        reasoning: sizeRec.reasoning,
+      });
+      return null;
     }
-  } else if (decision.action === "SELL") {
-    if (currentShares <= 0) return null;
-    const sellPct = Math.min(0.25, decision.confidence / 400);
-    tradeShares = Math.min(currentShares, Math.max(1, Math.floor(currentShares * sellPct)));
+    await logAction("portfolio", `Position sizing for ${decision.symbol}: ${sizeRec.reasoning}`, {
+      shares: sizeRec.shares,
+      valueUsd: sizeRec.valueUsd,
+    });
+  } catch (err) {
+    // Fallback to simple sizing if portfolio optimizer fails
+    await logAction("portfolio", `Portfolio optimizer failed for ${decision.symbol}, using fallback: ${err}`, {});
+    if (decision.action === "BUY") {
+      tradeShares = Math.max(200, Math.floor((decision.confidence / 100) * 1000));
+    } else if (decision.action === "SELL") {
+      if (currentShares <= 0) return null;
+      const sellPct = Math.min(0.25, decision.confidence / 400);
+      tradeShares = Math.min(currentShares, Math.max(1, Math.floor(currentShares * sellPct)));
+    }
   }
 
   if (tradeShares <= 0) return null;
