@@ -799,8 +799,8 @@ function analyzeSignals(
 
   // ─── Risk overrides (highest priority) ───
   if (riskCheck?.stopLossTriggered) {
-    // Notify on stop-loss trigger
-    await notifyStopLoss(symbol, currentPrice, costPrice, riskCheck.stopLossTriggered ? -15 : 0);
+    // Notify on stop-loss trigger (fire-and-forget since this is a sync function)
+    notifyStopLoss(symbol, currentPrice, costPrice ?? 0, riskCheck.stopLossTriggered ? -15 : 0).catch(() => {});
     return {
       symbol, action: "SELL", confidence: 90,
       reasoning: `⚠️ 止损触发：PnL 低于 ${STOP_LOSS_PCT}%，强制卖出以控制风险。`,
