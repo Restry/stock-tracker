@@ -1,4 +1,5 @@
 import pool, { toSqlVal, logAction } from "./db";
+import { getSymbolSettings } from "./trader-settings";
 
 export interface Quote {
   symbol: string;
@@ -247,11 +248,16 @@ async function fetchTavilyQuote(symbol: string): Promise<Quote | null> {
       return null;
     }
 
-    const companyMap: Record<string, string> = {
-      "01810.HK": "Xiaomi",
-      MSFT: "Microsoft",
-    };
-    const query = `latest stock price of ${companyMap[symbol] || symbol} (${symbol}) in local currency`;
+    // Load symbol names dynamically from DB settings
+    let symbolName = symbol;
+    try {
+      const settings = await getSymbolSettings();
+      const setting = settings.find(s => s.symbol === symbol);
+      if (setting?.name) symbolName = setting.name;
+    } catch {
+      // Fall back to symbol ticker if DB lookup fails
+    }
+    const query = `latest stock price of ${symbolName} (${symbol}) in local currency`;
     const res = await fetch("https://api.tavily.com/search", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -311,13 +317,85 @@ async function fetchQuote(symbol: string): Promise<Quote | null> {
   return null;
 }
 
-// HKD to USD approximate conversion
-const HKD_TO_USD = 0.128;
+// --- Exchange Rate System ---
+// Fetches real-time rates with fallback to reasonable defaults.
+// Caches rates for 1 hour to avoid excessive API calls.
 
+const FALLBACK_RATES: Record<string, number> = {
+  HKD: 0.128,
+  CNY: 0.138,
+  JPY: 0.0067,
+  GBP: 1.27,
+  EUR: 1.08,
+  CAD: 0.74,
+  AUD: 0.65,
+};
+
+let ratesCache: Record<string, number> = {};
+let ratesCacheTime = 0;
+const RATES_TTL = 60 * 60 * 1000; // 1 hour
+
+async function fetchExchangeRates(): Promise<Record<string, number>> {
+  const now = Date.now();
+  if (Object.keys(ratesCache).length > 0 && (now - ratesCacheTime) < RATES_TTL) {
+    return ratesCache;
+  }
+
+  // Try Yahoo Finance for exchange rates (free, no API key needed)
+  const pairs = ["HKDUSD=X", "CNYUSD=X", "JPYUSD=X", "GBPUSD=X", "EURUSD=X"];
+  const newRates: Record<string, number> = {};
+
+  for (const pair of pairs) {
+    try {
+      const url = `https://query1.finance.yahoo.com/v8/finance/chart/${pair}?range=1d&interval=1d`;
+      const res = await fetch(url, {
+        headers: { "User-Agent": UA },
+        signal: AbortSignal.timeout(5000),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        const rate = data?.chart?.result?.[0]?.meta?.regularMarketPrice;
+        if (rate && isFinite(rate)) {
+          const currency = pair.replace("USD=X", "");
+          newRates[currency] = rate;
+        }
+      }
+    } catch {
+      // Individual pair failure is OK, we have fallbacks
+    }
+  }
+
+  if (Object.keys(newRates).length > 0) {
+    // Merge with fallbacks for any missing currencies
+    ratesCache = { ...FALLBACK_RATES, ...newRates };
+    ratesCacheTime = now;
+    console.log(`Exchange rates updated: ${JSON.stringify(ratesCache)}`);
+  } else if (Object.keys(ratesCache).length === 0) {
+    // First time and fetch failed - use fallbacks
+    ratesCache = { ...FALLBACK_RATES };
+    ratesCacheTime = now;
+    console.warn("Exchange rate fetch failed, using fallback rates");
+  }
+  // else: keep existing cache even if refresh failed
+
+  return ratesCache;
+}
+
+export async function convertToUsdAsync(price: number, currency: string): Promise<number> {
+  if (currency === "USD") return price;
+  const rates = await fetchExchangeRates();
+  const rate = rates[currency];
+  if (rate) return price * rate;
+  console.warn(`No exchange rate for ${currency}, returning price as-is`);
+  return price;
+}
+
+// Synchronous fallback for backward compatibility
 export function convertToUsd(price: number, currency: string): number {
   if (currency === "USD") return price;
-  if (currency === "HKD") return price * HKD_TO_USD;
-  if (currency === "CNY") return price * 0.138;
+  // Use cached rates if available, otherwise fallbacks
+  const rate = (Object.keys(ratesCache).length > 0 ? ratesCache : FALLBACK_RATES)[currency];
+  if (rate) return price * rate;
   return price;
 }
 

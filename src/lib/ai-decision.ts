@@ -137,11 +137,45 @@ const toNumber = (value: number | string | null | undefined): number => {
 };
 const clampConfidence = (value: number): number => Math.max(0, Math.min(100, Math.round(value)));
 
-// Friendly names for search queries
-const SYMBOL_NAMES: Record<string, string> = {
-  MSFT: "Microsoft",
-  "01810.HK": "Xiaomi",
-};
+// Dynamic symbol name cache - loaded from DB on first use
+let symbolNamesCache: Record<string, string> | null = null;
+let symbolNamesCacheTime = 0;
+const SYMBOL_NAMES_TTL = 5 * 60 * 1000; // 5 minute cache
+
+async function getSymbolNamesMap(): Promise<Record<string, string>> {
+  const now = Date.now();
+  if (symbolNamesCache && (now - symbolNamesCacheTime) < SYMBOL_NAMES_TTL) {
+    return symbolNamesCache;
+  }
+  try {
+    const settings = await getSymbolSettings();
+    const map: Record<string, string> = {};
+    for (const s of settings) {
+      map[s.symbol] = s.name || s.symbol;
+    }
+    // Also check holdings table for any symbols not in settings
+    const { rows } = await pool.query(
+      `SELECT symbol, name FROM "st-holdings" WHERE name IS NOT NULL`
+    );
+    for (const row of rows as Array<{ symbol: string; name: string }>) {
+      if (!map[row.symbol]) {
+        map[row.symbol] = row.name;
+      }
+    }
+    symbolNamesCache = map;
+    symbolNamesCacheTime = now;
+    return map;
+  } catch (err) {
+    console.warn("Failed to load symbol names from DB, using fallback:", err);
+    // Return cache if available, otherwise empty
+    return symbolNamesCache || {};
+  }
+}
+
+// Synchronous accessor for places that already have the cache populated
+function getSymbolName(symbol: string): string {
+  return symbolNamesCache?.[symbol] || symbol;
+}
 
 // Search market news via Tavily deep search
 async function searchMarketNews(symbol: string): Promise<string> {
@@ -151,7 +185,8 @@ async function searchMarketNews(symbol: string): Promise<string> {
     return "No Tavily API key configured. Using technical signals only.";
   }
 
-  const companyName = SYMBOL_NAMES[symbol] || symbol;
+  const namesMap = await getSymbolNamesMap();
+  const companyName = namesMap[symbol] || symbol;
   const currentYear = new Date().getFullYear();
 
   try {
@@ -516,7 +551,7 @@ async function buildDecisionContext(
 
   return {
     symbol,
-    companyName: SYMBOL_NAMES[symbol] || symbol,
+    companyName: getSymbolName(symbol),
     quote: {
       price: currentPrice,
       currency,
@@ -1039,7 +1074,7 @@ async function executeSimulatedTrade(
   if (decision.action === "BUY") {
     // Ensure holding row exists
     const upsertSql = `INSERT INTO "st-holdings" (symbol, name, shares, cost_price, cost_currency, current_price, price_currency, exchange)
-      VALUES (${toSqlVal(decision.symbol)}, ${toSqlVal(SYMBOL_NAMES[decision.symbol] || decision.symbol)}, 0, ${toSqlVal(currentPrice)}, ${toSqlVal(currency)}, ${toSqlVal(currentPrice)}, ${toSqlVal(currency)}, ${toSqlVal(decision.symbol.endsWith(".HK") ? "HKEX" : "AUTO")})
+      VALUES (${toSqlVal(decision.symbol)}, ${toSqlVal(getSymbolName(decision.symbol))}, 0, ${toSqlVal(currentPrice)}, ${toSqlVal(currency)}, ${toSqlVal(currentPrice)}, ${toSqlVal(currency)}, ${toSqlVal(decision.symbol.endsWith(".HK") ? "HKEX" : "AUTO")})
       ON CONFLICT (symbol) DO NOTHING`;
     await pool.query(upsertSql);
 
@@ -1077,6 +1112,9 @@ async function executeSimulatedTrade(
 
 export async function runDecisions(): Promise<{ decisions: Decision[]; trades: Trade[] }> {
   await logAction("ai", "Starting daily AI decision cycle");
+
+  // Pre-warm the symbol names cache for use throughout the cycle
+  await getSymbolNamesMap();
 
   const trackedSettings = await getSymbolSettings(true);
   const globalAutoTrade = await getGlobalAutoTrade();

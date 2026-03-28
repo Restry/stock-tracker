@@ -1,22 +1,58 @@
+// --- DB Configuration ---
+// All credentials MUST come from environment variables.
+// The app will fail to start if they are not set.
+
+function requireEnv(name: string): string {
+  const value = process.env[name];
+  if (!value) {
+    throw new Error(
+      `Missing required environment variable: ${name}. ` +
+      `Set it in .env.local or your deployment environment.`
+    );
+  }
+  return value;
+}
+
 export const DB_CONFIG = {
   url: process.env.NEXT_PUBLIC_SUPABASE_URL || 'https://db.dora.restry.cn',
-  anonKey: process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyAgCiAgICAicm9sZSI6ICJhbm9uIiwKICAgICJpc3MiOiAic3VwYWJhc2UtZGVtbyIsCiAgICAiaWF0IjogMTY0MTc2OTIwMCwKICAgICJleHAiOiAxNzk5NTM1NjAwCn0.dc_X5iR_VP_qT0zsiyj_I_OZ2T9FtRU2BBNWN8Bu4GE',
-  serviceKey: process.env.SUPABASE_SERVICE_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyAgCiAgICAicm9sZSI6ICJzZXJ2aWNlX3JvbGUiLAogICAgImlzcyI6ICJzdXBhYmFzZS1kZW1vIiwKICAgICJpYXQiOiAxNjQxNzY5MjAwLAogICAgImV4cCI6IDE3OTk1MzU2MDAKfQ.DaYlNEoUrrEn2Ig7tqibS-PHK5vgusbcbo7X36XVt4Q',
+  get anonKey(): string {
+    return requireEnv('NEXT_PUBLIC_SUPABASE_ANON_KEY');
+  },
+  get serviceKey(): string {
+    return requireEnv('SUPABASE_SERVICE_KEY');
+  },
   tablePrefix: 'st-'
 };
 
-// --- Utilities for Raw SQL Escaping (Fixing 42P02) ---
+// --- Utilities for Raw SQL Escaping ---
+// NOTE: The DB REST endpoint (/pg/query) does not support parameterized queries ($1, $2...).
+// We use client-side escaping as a mitigation. This is hardened to handle common
+// injection vectors including single quotes, backslashes, null bytes, and unicode escapes.
 
 function escapeSqlString(str: string): string {
   if (!str) return "";
-  return str.replace(/'/g, "''");
+  return str
+    .replace(/\0/g, "")          // Remove null bytes
+    .replace(/\\/g, "\\\\")      // Escape backslashes
+    .replace(/'/g, "''")         // Escape single quotes (SQL standard)
+    .replace(/\u2018/g, "''")    // Left single quotation mark
+    .replace(/\u2019/g, "''")    // Right single quotation mark
+    .replace(/\u0000/g, "");     // Additional null byte forms
 }
 
 export function toSqlVal(val: any): string {
   if (val === null || val === undefined) return 'NULL';
   if (typeof val === 'number') return isFinite(val) ? val.toString() : 'NULL';
   if (typeof val === 'boolean') return val ? 'TRUE' : 'FALSE';
-  if (typeof val === 'string') return `'${escapeSqlString(val)}'`;
+  if (typeof val === 'string') {
+    // Reject strings that look like SQL injection attempts
+    const suspicious = /;\s*(DROP|DELETE|UPDATE|INSERT|ALTER|CREATE|TRUNCATE|EXEC)\s/i;
+    if (suspicious.test(val)) {
+      console.warn('Suspicious SQL value rejected:', val.substring(0, 100));
+      return 'NULL';
+    }
+    return `'${escapeSqlString(val)}'`;
+  }
   // Handle objects/arrays as JSON strings
   if (typeof val === 'object') return `'${escapeSqlString(JSON.stringify(val))}'`;
   return 'NULL';
@@ -37,9 +73,9 @@ async function ensureLogsTable(): Promise<void> {
 
 /**
  * Server-side ONLY: SQL Query using Service Role.
- * Includes timeout and single retry for transient Supabase errors.
+ * Includes timeout and exponential backoff retry for transient errors.
  */
-async function dbQuery(sql: string, retries = 1): Promise<any> {
+async function dbQuery(sql: string, retries = 2): Promise<any> {
   for (let attempt = 0; attempt <= retries; attempt++) {
     try {
       const res = await fetch(`${DB_CONFIG.url}/pg/query`, {
@@ -55,10 +91,11 @@ async function dbQuery(sql: string, retries = 1): Promise<any> {
       
       if (!res.ok) {
         const text = await res.text();
-        // Retry on 502/503/504 (transient gateway errors)
-        if (attempt < retries && [502, 503, 504].includes(res.status)) {
-          console.warn(`DB transient error ${res.status}, retrying...`);
-          await new Promise(r => setTimeout(r, 1000));
+        // Retry on transient gateway errors with exponential backoff
+        if (attempt < retries && [502, 503, 504, 429].includes(res.status)) {
+          const delay = Math.min(1000 * Math.pow(2, attempt), 8000);
+          console.warn(`DB transient error ${res.status}, retrying in ${delay}ms...`);
+          await new Promise(r => setTimeout(r, delay));
           continue;
         }
         console.error('DB HTTP Error:', res.status, text, 'SQL:', sql.substring(0, 200));
@@ -72,9 +109,15 @@ async function dbQuery(sql: string, retries = 1): Promise<any> {
       }
       return data;
     } catch (err: unknown) {
-      if (attempt < retries && err instanceof DOMException && err.name === "TimeoutError") {
-        console.warn('DB query timed out, retrying...');
-        continue;
+      if (attempt < retries) {
+        const isTimeout = err instanceof DOMException && err.name === "TimeoutError";
+        const isNetwork = err instanceof TypeError && (err as any).cause?.code === 'ECONNREFUSED';
+        if (isTimeout || isNetwork) {
+          const delay = Math.min(1000 * Math.pow(2, attempt), 8000);
+          console.warn(`DB query ${isTimeout ? 'timed out' : 'network error'}, retrying in ${delay}ms...`);
+          await new Promise(r => setTimeout(r, delay));
+          continue;
+        }
       }
       throw err;
     }
@@ -83,7 +126,6 @@ async function dbQuery(sql: string, retries = 1): Promise<any> {
 
 /**
  * Log an action to the 'st-logs' table.
- * This is "Internalization" requirement #3.
  */
 export async function logAction(category: string, message: string, details?: any) {
   console.log(`[${category}] ${message}`);
@@ -99,8 +141,8 @@ export async function logAction(category: string, message: string, details?: any
 
 /**
  * Standard pool-like object.
- * NOTE: We ignore `params` and assume the caller uses `toSqlVal` for safety.
- * This fixes the 42P02 parameter binding errors by enforcing client-side interpolation.
+ * Uses toSqlVal for client-side escaping since the REST endpoint
+ * does not support parameterized queries.
  */
 const pool = {
   query: async (text: string) => {
