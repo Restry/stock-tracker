@@ -6,6 +6,12 @@ import {
   type SymbolSetting,
 } from "./trader-settings";
 import {
+  notifyTrade,
+  notifyStopLoss,
+  notifyPriceAlert,
+  notifyError,
+} from "./notifications";
+import {
   computeTechnicalIndicators,
   formatIndicatorsForPrompt,
   type TechnicalIndicators,
@@ -793,6 +799,8 @@ function analyzeSignals(
 
   // ─── Risk overrides (highest priority) ───
   if (riskCheck?.stopLossTriggered) {
+    // Notify on stop-loss trigger
+    await notifyStopLoss(symbol, currentPrice, costPrice, riskCheck.stopLossTriggered ? -15 : 0);
     return {
       symbol, action: "SELL", confidence: 90,
       reasoning: `⚠️ 止损触发：PnL 低于 ${STOP_LOSS_PCT}%，强制卖出以控制风险。`,
@@ -1107,10 +1115,14 @@ async function executeSimulatedTrade(
   // Log trade execution
   await logAction("trade", `Executed ${trade.action} for ${trade.symbol}`, trade);
 
+  // Send notification
+  await notifyTrade(trade.symbol, trade.action, trade.shares, trade.price, trade.currency, trade.reason);
+
   return trade;
 }
 
 export async function runDecisions(): Promise<{ decisions: Decision[]; trades: Trade[] }> {
+  try {
   await logAction("ai", "Starting daily AI decision cycle");
 
   // Pre-warm the symbol names cache for use throughout the cycle
@@ -1150,6 +1162,16 @@ export async function runDecisions(): Promise<{ decisions: Decision[]; trades: T
     const quote = await getQuote(setting.symbol);
     const currentPrice = quote ? quote.price : toNumber(row.current_price);
     const currency = quote ? quote.currency : (row.price_currency || "USD");
+
+    // Check for significant price movement and notify
+    if (quote?.changePercent && Math.abs(quote.changePercent) >= 3) {
+      await notifyPriceAlert(
+        setting.symbol,
+        currentPrice,
+        quote.changePercent,
+        quote.changePercent > 0 ? "up" : "down"
+      );
+    }
 
     // 2. Search for REAL market news
     const news = await searchMarketNews(setting.symbol);
@@ -1281,4 +1303,10 @@ export async function runDecisions(): Promise<{ decisions: Decision[]; trades: T
     globalAutoTrade,
   });
   return { decisions, trades };
+  } catch (err) {
+    const errorMsg = err instanceof Error ? err.message : String(err);
+    await logAction("ai", `Decision cycle failed: ${errorMsg}`, { error: errorMsg });
+    await notifyError("runDecisions", errorMsg);
+    throw err;
+  }
 }
