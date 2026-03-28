@@ -40,6 +40,8 @@ export interface DashboardData {
   primaryHolding: Holding | undefined;
   totalPnl: number;
   totalPnlPct: number;
+  selectedSymbol: string;
+  setSelectedSymbol: (symbol: string) => void;
   handleAction: (action: string) => Promise<void>;
   savePosition: (symbol: string, shares: number, costPrice: number) => Promise<void>;
   fetchData: () => Promise<void>;
@@ -64,6 +66,15 @@ export function useDashboardData(): DashboardData {
   const [refreshCountdown, setRefreshCountdown] = useState(30);
   const [dataAge, setDataAge] = useState(0);
   const [editingPosition, setEditingPosition] = useState(false);
+  const [selectedSymbol, setSelectedSymbolRaw] = useState(PRIMARY_SYMBOL);
+
+  // When symbol changes, reset symbol-specific state and refetch
+  const setSelectedSymbol = useCallback((symbol: string) => {
+    setSelectedSymbolRaw(symbol);
+    setTechIndicators(null);
+    setQuoteData(null);
+    setPriceHistory([]);
+  }, []);
 
   const fetchHealth = useCallback(async () => {
     try {
@@ -85,7 +96,7 @@ export function useDashboardData(): DashboardData {
 
   const fetchIndicators = useCallback(async () => {
     try {
-      const res = await fetch(`/api/indicators?symbol=${PRIMARY_SYMBOL}`);
+      const res = await fetch(`/api/indicators?symbol=${encodeURIComponent(selectedSymbol)}`);
       if (!res.ok) return;
       const data = await res.json();
       if (data.indicators) setTechIndicators(data.indicators);
@@ -102,18 +113,18 @@ export function useDashboardData(): DashboardData {
     } catch (err) {
       console.error("Failed to fetch indicators:", err);
     }
-  }, []);
+  }, [selectedSymbol]);
 
   const fetchPriceHistory = useCallback(async () => {
     try {
-      const res = await fetch(`/api/prices?symbol=${PRIMARY_SYMBOL}&limit=100`);
+      const res = await fetch(`/api/prices?symbol=${encodeURIComponent(selectedSymbol)}&limit=100`);
       if (!res.ok) return;
       const data = await res.json();
       if (data.prices) setPriceHistory(data.prices);
     } catch (err) {
       console.error("Failed to fetch price history:", err);
     }
-  }, []);
+  }, [selectedSymbol]);
 
   const fetchData = useCallback(async () => {
     try {
@@ -201,7 +212,7 @@ export function useDashboardData(): DashboardData {
   const totalCost = holdings.reduce((sum, h) => sum + (h.costBasis || 0), 0);
   const totalPnlPct = totalCost > 0 ? (totalPnl / totalCost) * 100 : 0;
 
-  const primaryHolding = holdings.find(h => h.symbol === PRIMARY_SYMBOL || h.symbol.includes("01810"));
+  const primaryHolding = holdings.find(h => h.symbol === selectedSymbol);
 
   const monitoring = useMemo(() => {
     if (!primaryHolding) return null;
@@ -277,6 +288,8 @@ export function useDashboardData(): DashboardData {
     primaryHolding,
     totalPnl,
     totalPnlPct,
+    selectedSymbol,
+    setSelectedSymbol,
     handleAction,
     savePosition,
     fetchData,

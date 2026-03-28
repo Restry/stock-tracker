@@ -5,7 +5,6 @@ import {
   ReferenceLine,
 } from "recharts";
 import type { MonitoringData, QuoteData, TechIndicators, Holding, ChartDataPoint } from "../types";
-import { PRIMARY_SYMBOL } from "../types";
 import { fmtCcy } from "../utils";
 import { useState } from "react";
 
@@ -20,8 +19,11 @@ export function PriceMonitorPanel({
   editingPosition,
   setEditingPosition,
   savePosition,
+  selectedSymbol,
+  setSelectedSymbol,
+  holdings,
 }: {
-  monitoring: MonitoringData;
+  monitoring: MonitoringData | null;
   chartData: ChartDataPoint[];
   quoteData: QuoteData | null;
   techIndicators: TechIndicators | null;
@@ -31,161 +33,210 @@ export function PriceMonitorPanel({
   editingPosition: boolean;
   setEditingPosition: (v: boolean) => void;
   savePosition: (symbol: string, shares: number, costPrice: number) => Promise<void>;
+  selectedSymbol: string;
+  setSelectedSymbol: (symbol: string) => void;
+  holdings: Holding[];
 }) {
+  // Symbol selector tabs
+  const symbolOptions = holdings.length > 0
+    ? holdings.map(h => ({ symbol: h.symbol, name: h.name }))
+    : [{ symbol: selectedSymbol, name: selectedSymbol }];
+
+  // Deduplicate
+  const seen = new Set<string>();
+  const uniqueSymbols = symbolOptions.filter(s => {
+    if (seen.has(s.symbol)) return false;
+    seen.add(s.symbol);
+    return true;
+  });
+
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
-      {/* Price & Chart */}
-      <div className="lg:col-span-8 bg-surface border border-border rounded-2xl p-4 md:p-5">
-        <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3 mb-4">
-          <div>
-            <div className="flex items-center gap-2 mb-1">
-              <span className="text-lg font-bold font-mono text-accent">{PRIMARY_SYMBOL}</span>
-              <span className="text-sm text-muted">{primaryHolding?.name || "小米集团"}</span>
+    <div className="space-y-4">
+      {/* Symbol Selector */}
+      {uniqueSymbols.length > 1 && (
+        <div className="flex items-center gap-2 overflow-x-auto pb-1">
+          <span className="text-[10px] font-bold text-muted-dark uppercase tracking-wider shrink-0">监控:</span>
+          {uniqueSymbols.map(s => (
+            <button
+              key={s.symbol}
+              onClick={() => setSelectedSymbol(s.symbol)}
+              className={`px-3 py-1.5 rounded-lg text-xs font-mono font-medium transition-colors whitespace-nowrap ${
+                selectedSymbol === s.symbol
+                  ? "bg-accent/15 text-accent border border-accent/30"
+                  : "bg-surface-elevated text-muted-dark hover:text-foreground border border-border"
+              }`}
+            >
+              {s.symbol}
+              <span className="ml-1.5 text-[10px] opacity-60">{s.name}</span>
+            </button>
+          ))}
+        </div>
+      )}
+
+      {monitoring ? (
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
+          {/* Price & Chart */}
+          <div className="lg:col-span-8 bg-surface border border-border rounded-2xl p-4 md:p-5">
+            <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3 mb-4">
+              <div>
+                <div className="flex items-center gap-2 mb-1">
+                  <span className="text-lg font-bold font-mono text-accent">{selectedSymbol}</span>
+                  <span className="text-sm text-muted">{primaryHolding?.name || selectedSymbol}</span>
+                </div>
+                <div className="flex items-baseline gap-3">
+                  <span key={priceFlashKey.current} className={`text-3xl md:text-4xl font-bold font-mono px-1 -mx-1 ${priceFlash ? "price-flash" : ""}`}>
+                    {fmtCcy(monitoring.currentPrice, monitoring.currency)}
+                  </span>
+                  {quoteData && (
+                    <span className={`text-lg font-mono font-semibold ${quoteData.changePercent >= 0 ? "text-profit" : "text-loss"}`}>
+                      {quoteData.changePercent >= 0 ? "+" : ""}{quoteData.changePercent.toFixed(2)}%
+                    </span>
+                  )}
+                </div>
+                {quoteData && (
+                  <div className="flex items-center gap-3 mt-1 text-xs text-muted-dark font-mono">
+                    <span>涨跌: {quoteData.change >= 0 ? "+" : ""}{quoteData.change.toFixed(2)}</span>
+                    <span>前收: {quoteData.previousClose?.toFixed(2)}</span>
+                    {quoteData.pe && <span>PE: {quoteData.pe.toFixed(1)}</span>}
+                  </div>
+                )}
+              </div>
+              <div className="flex gap-4 text-xs font-mono">
+                {quoteData?.fiftyTwoWeekLow != null && (
+                  <div className="text-center">
+                    <div className="text-muted-dark">52周低</div>
+                    <div className="text-foreground">{quoteData.fiftyTwoWeekLow.toFixed(2)}</div>
+                  </div>
+                )}
+                {quoteData?.fiftyTwoWeekHigh != null && (
+                  <div className="text-center">
+                    <div className="text-muted-dark">52周高</div>
+                    <div className="text-foreground">{quoteData.fiftyTwoWeekHigh.toFixed(2)}</div>
+                  </div>
+                )}
+                {quoteData?.dividendYield != null && (
+                  <div className="text-center">
+                    <div className="text-muted-dark">股息率</div>
+                    <div className="text-foreground">{quoteData.dividendYield.toFixed(2)}%</div>
+                  </div>
+                )}
+              </div>
             </div>
-            <div className="flex items-baseline gap-3">
-              <span key={priceFlashKey.current} className={`text-3xl md:text-4xl font-bold font-mono px-1 -mx-1 ${priceFlash ? "price-flash" : ""}`}>
-                {fmtCcy(monitoring.currentPrice, monitoring.currency)}
-              </span>
-              {quoteData && (
-                <span className={`text-lg font-mono font-semibold ${quoteData.changePercent >= 0 ? "text-profit" : "text-loss"}`}>
-                  {quoteData.changePercent >= 0 ? "+" : ""}{quoteData.changePercent.toFixed(2)}%
-                </span>
+            {/* Price Chart */}
+            <div className="h-[200px] md:h-[280px]">
+              {chartData.length > 0 ? (
+                <ResponsiveContainer width="100%" height="100%">
+                  <AreaChart data={chartData}>
+                    <defs>
+                      <linearGradient id="colorPrice" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="0%" stopColor="#58a6ff" stopOpacity={0.25} />
+                        <stop offset="100%" stopColor="#58a6ff" stopOpacity={0} />
+                      </linearGradient>
+                    </defs>
+                    <XAxis dataKey="date" stroke="#30363d" tick={{ fill: "#484f58", fontSize: 10 }} axisLine={false} tickLine={false} interval="preserveStartEnd" />
+                    <YAxis stroke="#30363d" tick={{ fill: "#484f58", fontSize: 10 }} axisLine={false} tickLine={false} domain={["auto", "auto"]} tickFormatter={(v: number) => v.toFixed(1)} width={50} />
+                    <Tooltip
+                      contentStyle={{ backgroundColor: "#161b22", border: "1px solid #30363d", borderRadius: "12px", fontSize: "12px", color: "#e8eaed" }}
+                      formatter={(value: number | undefined) => [fmtCcy(value ?? 0, monitoring.currency), "价格"]}
+                    />
+                    {monitoring.costPrice > 0 && (
+                      <ReferenceLine y={monitoring.costPrice} stroke="#d29922" strokeDasharray="4 4" label={{ value: `成本 ${monitoring.costPrice.toFixed(2)}`, fill: "#d29922", fontSize: 10, position: "insideTopRight" }} />
+                    )}
+                    <Area type="monotone" dataKey="value" stroke="#58a6ff" strokeWidth={2} fill="url(#colorPrice)" />
+                  </AreaChart>
+                </ResponsiveContainer>
+              ) : (
+                <div className="h-full flex items-center justify-center text-muted-dark text-sm">暂无价格历史数据</div>
               )}
             </div>
-            {quoteData && (
-              <div className="flex items-center gap-3 mt-1 text-xs text-muted-dark font-mono">
-                <span>涨跌: {quoteData.change >= 0 ? "+" : ""}{quoteData.change.toFixed(2)}</span>
-                <span>前收: {quoteData.previousClose?.toFixed(2)}</span>
-                {quoteData.pe && <span>PE: {quoteData.pe.toFixed(1)}</span>}
-              </div>
-            )}
           </div>
-          <div className="flex gap-4 text-xs font-mono">
-            {quoteData?.fiftyTwoWeekLow != null && (
-              <div className="text-center">
-                <div className="text-muted-dark">52周低</div>
-                <div className="text-foreground">{quoteData.fiftyTwoWeekLow.toFixed(2)}</div>
+
+          {/* Position & Strategy Panel */}
+          <div className="lg:col-span-4 space-y-4">
+            {/* Position Card */}
+            <div className="bg-surface border border-border rounded-2xl p-4 md:p-5">
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="text-xs font-bold text-muted-dark uppercase tracking-wider">持仓信息</h3>
+                <button onClick={() => setEditingPosition(!editingPosition)} className="text-[10px] text-accent hover:text-accent-bright transition-colors">
+                  {editingPosition ? "取消" : "编辑"}
+                </button>
               </div>
-            )}
-            {quoteData?.fiftyTwoWeekHigh != null && (
-              <div className="text-center">
-                <div className="text-muted-dark">52周高</div>
-                <div className="text-foreground">{quoteData.fiftyTwoWeekHigh.toFixed(2)}</div>
-              </div>
-            )}
-            {quoteData?.dividendYield != null && (
-              <div className="text-center">
-                <div className="text-muted-dark">股息率</div>
-                <div className="text-foreground">{quoteData.dividendYield.toFixed(2)}%</div>
-              </div>
-            )}
-          </div>
-        </div>
-        {/* Price Chart */}
-        <div className="h-[200px] md:h-[280px]">
-          {chartData.length > 0 ? (
-            <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={chartData}>
-                <defs>
-                  <linearGradient id="colorPrice" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor="#58a6ff" stopOpacity={0.25} />
-                    <stop offset="100%" stopColor="#58a6ff" stopOpacity={0} />
-                  </linearGradient>
-                </defs>
-                <XAxis dataKey="date" stroke="#30363d" tick={{ fill: "#484f58", fontSize: 10 }} axisLine={false} tickLine={false} interval="preserveStartEnd" />
-                <YAxis stroke="#30363d" tick={{ fill: "#484f58", fontSize: 10 }} axisLine={false} tickLine={false} domain={["auto", "auto"]} tickFormatter={(v: number) => v.toFixed(1)} width={50} />
-                <Tooltip
-                  contentStyle={{ backgroundColor: "#161b22", border: "1px solid #30363d", borderRadius: "12px", fontSize: "12px", color: "#e8eaed" }}
-                  formatter={(value: number | undefined) => [fmtCcy(value ?? 0, monitoring.currency), "价格"]}
+              {editingPosition ? (
+                <PositionEditor
+                  symbol={selectedSymbol}
+                  currentShares={monitoring.shares}
+                  currentCost={monitoring.costPrice}
+                  currency={monitoring.currency}
+                  onSave={(shares, cost) => savePosition(selectedSymbol, shares, cost)}
+                  onCancel={() => setEditingPosition(false)}
                 />
-                {monitoring.costPrice > 0 && (
-                  <ReferenceLine y={monitoring.costPrice} stroke="#d29922" strokeDasharray="4 4" label={{ value: `成本 ${monitoring.costPrice.toFixed(2)}`, fill: "#d29922", fontSize: 10, position: "insideTopRight" }} />
-                )}
-                <Area type="monotone" dataKey="value" stroke="#58a6ff" strokeWidth={2} fill="url(#colorPrice)" />
-              </AreaChart>
-            </ResponsiveContainer>
-          ) : (
-            <div className="h-full flex items-center justify-center text-muted-dark text-sm">暂无价格历史数据</div>
-          )}
-        </div>
-      </div>
+              ) : (
+                <div className="space-y-2.5">
+                  <InfoRow label="持仓" value={`${monitoring.shares.toLocaleString()} 股`} />
+                  <InfoRow label="成本价" value={fmtCcy(monitoring.costPrice, monitoring.currency)} />
+                  <InfoRow label="现价" value={fmtCcy(monitoring.currentPrice, monitoring.currency)} />
+                  <div className="border-t border-border my-2" />
+                  <InfoRow label="总成本" value={fmtCcy(monitoring.totalCost, monitoring.currency)} />
+                  <InfoRow label="市值" value={fmtCcy(monitoring.marketValue, monitoring.currency)} />
+                  <div className="flex justify-between text-sm font-semibold">
+                    <span className="text-muted">盈亏</span>
+                    <span className={`font-mono ${monitoring.pnl >= 0 ? "text-profit" : "text-loss"}`}>
+                      {monitoring.pnl >= 0 ? "+" : ""}{fmtCcy(monitoring.pnl, monitoring.currency)}
+                      <span className="text-xs ml-1 opacity-75">({monitoring.pnlPct >= 0 ? "+" : ""}{monitoring.pnlPct.toFixed(2)}%)</span>
+                    </span>
+                  </div>
+                </div>
+              )}
+            </div>
 
-      {/* Position & Strategy Panel */}
-      <div className="lg:col-span-4 space-y-4">
-        {/* Position Card */}
-        <div className="bg-surface border border-border rounded-2xl p-4 md:p-5">
-          <div className="flex items-center justify-between mb-3">
-            <h3 className="text-xs font-bold text-muted-dark uppercase tracking-wider">持仓信息</h3>
-            <button onClick={() => setEditingPosition(!editingPosition)} className="text-[10px] text-accent hover:text-accent-bright transition-colors">
-              {editingPosition ? "取消" : "✏️ 编辑"}
-            </button>
-          </div>
-          {editingPosition ? (
-            <PositionEditor
-              symbol={PRIMARY_SYMBOL}
-              currentShares={monitoring.shares}
-              currentCost={monitoring.costPrice}
-              currency={monitoring.currency}
-              onSave={(shares, cost) => savePosition(PRIMARY_SYMBOL, shares, cost)}
-              onCancel={() => setEditingPosition(false)}
-            />
-          ) : (
-            <div className="space-y-2.5">
-              <InfoRow label="持仓" value={`${monitoring.shares.toLocaleString()} 股`} />
-              <InfoRow label="成本价" value={fmtCcy(monitoring.costPrice, monitoring.currency)} />
-              <InfoRow label="现价" value={fmtCcy(monitoring.currentPrice, monitoring.currency)} />
-              <div className="border-t border-border my-2" />
-              <InfoRow label="总成本" value={fmtCcy(monitoring.totalCost, monitoring.currency)} />
-              <InfoRow label="市值" value={fmtCcy(monitoring.marketValue, monitoring.currency)} />
-              <div className="flex justify-between text-sm font-semibold">
-                <span className="text-muted">盈亏</span>
-                <span className={`font-mono ${monitoring.pnl >= 0 ? "text-profit" : "text-loss"}`}>
-                  {monitoring.pnl >= 0 ? "+" : ""}{fmtCcy(monitoring.pnl, monitoring.currency)}
-                  <span className="text-xs ml-1 opacity-75">({monitoring.pnlPct >= 0 ? "+" : ""}{monitoring.pnlPct.toFixed(2)}%)</span>
-                </span>
+            {/* Break-even Card */}
+            <div className={`rounded-2xl p-4 md:p-5 border ${monitoring.pnl >= 0 ? "bg-profit/5 border-profit/20" : "bg-loss/5 border-loss/20"}`}>
+              <h3 className="text-xs font-bold text-muted-dark uppercase tracking-wider mb-3">回本分析</h3>
+              <div className="space-y-2">
+                <InfoRow label="回本价" value={fmtCcy(monitoring.breakEvenPrice, monitoring.currency)} bold />
+                <div className="flex justify-between text-sm">
+                  <span className="text-muted">距回本</span>
+                  <span className={`font-mono font-semibold ${monitoring.priceToBreakEven <= 0 ? "text-profit" : "text-loss"}`}>
+                    {monitoring.priceToBreakEven <= 0
+                      ? `已盈利 +${Math.abs(monitoring.pctToBreakEven).toFixed(2)}%`
+                      : `需涨 +${monitoring.pctToBreakEven.toFixed(2)}%`}
+                  </span>
+                </div>
+              </div>
+              {monitoring.priceToBreakEven > 0 && (
+                <div className="mt-3 pt-3 border-t border-border/50">
+                  <div className="w-full bg-surface-elevated rounded-full h-2 overflow-hidden">
+                    <div className="h-full bg-accent rounded-full transition-all" style={{ width: `${Math.min(100, (monitoring.currentPrice / monitoring.breakEvenPrice) * 100)}%` }} />
+                  </div>
+                  <div className="flex justify-between text-[10px] text-muted-dark mt-1 font-mono">
+                    <span>0</span>
+                    <span>{((monitoring.currentPrice / monitoring.breakEvenPrice) * 100).toFixed(1)}%</span>
+                    <span>回本</span>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* T-Trading Signals */}
+            <div className="bg-surface border border-border rounded-2xl p-4 md:p-5">
+              <h3 className="text-xs font-bold text-muted-dark uppercase tracking-wider mb-3">做 T 信号</h3>
+              <div className="space-y-2">
+                <SignalRow label="T-Buy (布林下轨+RSI超卖)" active={monitoring.tBuyActive} desc={monitoring.tBuyActive ? "信号触发：建议日内低吸" : "未触发"} type="buy" />
+                <SignalRow label="摊薄成本机会" active={monitoring.averageDownOpportunity} desc={monitoring.averageDownOpportunity ? "价格低于成本+技术面支撑" : "未触发"} type="buy" />
+                <SignalRow label="止盈降本信号" active={monitoring.profitTakingOpportunity} desc={monitoring.profitTakingOpportunity ? "价格高于成本3%+，可部分卖出" : "未触发"} type="sell" />
               </div>
             </div>
-          )}
-        </div>
-
-        {/* Break-even Card */}
-        <div className={`rounded-2xl p-4 md:p-5 border ${monitoring.pnl >= 0 ? "bg-profit/5 border-profit/20" : "bg-loss/5 border-loss/20"}`}>
-          <h3 className="text-xs font-bold text-muted-dark uppercase tracking-wider mb-3">回本分析</h3>
-          <div className="space-y-2">
-            <InfoRow label="回本价" value={fmtCcy(monitoring.breakEvenPrice, monitoring.currency)} bold />
-            <div className="flex justify-between text-sm">
-              <span className="text-muted">距回本</span>
-              <span className={`font-mono font-semibold ${monitoring.priceToBreakEven <= 0 ? "text-profit" : "text-loss"}`}>
-                {monitoring.priceToBreakEven <= 0
-                  ? `已盈利 +${Math.abs(monitoring.pctToBreakEven).toFixed(2)}%`
-                  : `需涨 +${monitoring.pctToBreakEven.toFixed(2)}%`}
-              </span>
-            </div>
-          </div>
-          {monitoring.priceToBreakEven > 0 && (
-            <div className="mt-3 pt-3 border-t border-border/50">
-              <div className="w-full bg-surface-elevated rounded-full h-2 overflow-hidden">
-                <div className="h-full bg-accent rounded-full transition-all" style={{ width: `${Math.min(100, (monitoring.currentPrice / monitoring.breakEvenPrice) * 100)}%` }} />
-              </div>
-              <div className="flex justify-between text-[10px] text-muted-dark mt-1 font-mono">
-                <span>0</span>
-                <span>{((monitoring.currentPrice / monitoring.breakEvenPrice) * 100).toFixed(1)}%</span>
-                <span>回本</span>
-              </div>
-            </div>
-          )}
-        </div>
-
-        {/* T-Trading Signals */}
-        <div className="bg-surface border border-border rounded-2xl p-4 md:p-5">
-          <h3 className="text-xs font-bold text-muted-dark uppercase tracking-wider mb-3">做 T 信号</h3>
-          <div className="space-y-2">
-            <SignalRow label="T-Buy (布林下轨+RSI超卖)" active={monitoring.tBuyActive} desc={monitoring.tBuyActive ? "信号触发：建议日内低吸" : "未触发"} type="buy" />
-            <SignalRow label="摊薄成本机会" active={monitoring.averageDownOpportunity} desc={monitoring.averageDownOpportunity ? "价格低于成本+技术面支撑" : "未触发"} type="buy" />
-            <SignalRow label="止盈降本信号" active={monitoring.profitTakingOpportunity} desc={monitoring.profitTakingOpportunity ? "价格高于成本3%+，可部分卖出" : "未触发"} type="sell" />
           </div>
         </div>
-      </div>
+      ) : (
+        /* No monitoring data for selected symbol */
+        <div className="bg-surface border border-border rounded-2xl p-6">
+          <div className="text-center text-muted-dark text-sm">
+            <p className="font-mono text-accent text-lg mb-2">{selectedSymbol}</p>
+            <p>{primaryHolding ? "正在加载行情数据..." : `${selectedSymbol} 暂无持仓数据，请先添加持仓`}</p>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

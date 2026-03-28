@@ -39,20 +39,21 @@ export default function DashboardPage() {
 
       <main className="w-full px-3 md:px-6 lg:px-8 py-4 md:py-6 space-y-4 md:space-y-5">
         {/* Primary Stock Monitoring Panel */}
-        {data.monitoring && (
-          <PriceMonitorPanel
-            monitoring={data.monitoring}
-            chartData={data.chartData}
-            quoteData={data.quoteData}
-            techIndicators={data.techIndicators}
-            primaryHolding={data.primaryHolding}
-            priceFlash={data.priceFlash}
-            priceFlashKey={data.priceFlashKey}
-            editingPosition={data.editingPosition}
-            setEditingPosition={data.setEditingPosition}
-            savePosition={data.savePosition}
-          />
-        )}
+        <PriceMonitorPanel
+          monitoring={data.monitoring}
+          chartData={data.chartData}
+          quoteData={data.quoteData}
+          techIndicators={data.techIndicators}
+          primaryHolding={data.primaryHolding}
+          priceFlash={data.priceFlash}
+          priceFlashKey={data.priceFlashKey}
+          editingPosition={data.editingPosition}
+          setEditingPosition={data.setEditingPosition}
+          savePosition={data.savePosition}
+          selectedSymbol={data.selectedSymbol}
+          setSelectedSymbol={data.setSelectedSymbol}
+          holdings={data.holdings}
+        />
 
         {/* Technical Indicators */}
         {data.techIndicators && data.techIndicators.dataPoints >= 5 && (
