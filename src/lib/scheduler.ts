@@ -7,6 +7,7 @@ import { updateAllPrices } from "./prices";
 import { runDecisions } from "./ai-decision";
 import { logAction } from "./db";
 import { getSymbolSettings } from "./trader-settings";
+import { notifyError, notify } from "./notifications";
 
 const weekdayMap: Record<string, number> = {
   Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6,
@@ -56,6 +57,10 @@ function isAnyMarketOpen(symbols: string[]): boolean {
 let schedulerTimer: ReturnType<typeof setTimeout> | null = null;
 let isRunning = false;
 let cachedSymbols: string[] = [];
+let lastDailySummaryDate: string | null = null;
+let dailyCycleCount = 0;
+let dailyTradeCount = 0;
+let dailyErrorCount = 0;
 
 async function runTradingCycle(): Promise<void> {
   if (isRunning) {
@@ -65,6 +70,15 @@ async function runTradingCycle(): Promise<void> {
   isRunning = true;
   const startTime = Date.now();
 
+  // Reset daily counters at date boundary
+  const today = new Date().toISOString().slice(0, 10);
+  if (lastDailySummaryDate !== today) {
+    dailyCycleCount = 0;
+    dailyTradeCount = 0;
+    dailyErrorCount = 0;
+    lastDailySummaryDate = today;
+  }
+
   try {
     // Check if any monitored market is open
     const settings = await getSymbolSettings(true);
@@ -72,6 +86,8 @@ async function runTradingCycle(): Promise<void> {
     cachedSymbols = symbols;
     if (!isAnyMarketOpen(symbols)) {
       console.log(`[Scheduler] No markets open. Monitored: ${symbols.join(", ")}`);
+      // Send daily summary when all markets close (once per day)
+      await maybeSendDailySummary(symbols);
       return;
     }
 
@@ -85,6 +101,9 @@ async function runTradingCycle(): Promise<void> {
     const result = await runDecisions();
     console.log(`[Scheduler] Generated ${result.decisions.length} decisions, ${result.trades.length} trades.`);
 
+    dailyCycleCount++;
+    dailyTradeCount += result.trades.length;
+
     const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
     await logAction("scheduler", "Automated trading cycle completed", {
       action: "Scheduler Cycle",
@@ -96,14 +115,52 @@ async function runTradingCycle(): Promise<void> {
       elapsedSec: elapsed,
     });
   } catch (error) {
+    dailyErrorCount++;
     console.error("[Scheduler] Trading cycle failed:", error);
     await logAction("scheduler", "Automated trading cycle failed", {
       action: "Scheduler Cycle",
       status: "fail",
       summary: `Scheduler cycle failed: ${String(error).substring(0, 500)}`,
     }).catch(() => {});
+
+    // Notify on scheduler errors
+    notifyError(
+      "scheduler",
+      `Trading cycle failed: ${error instanceof Error ? error.message : String(error)}`
+    ).catch(() => {});
   } finally {
     isRunning = false;
+  }
+}
+
+let dailySummarySent = false;
+
+async function maybeSendDailySummary(symbols: string[]): Promise<void> {
+  // Only send once per day, when markets close
+  if (dailySummarySent || dailyCycleCount === 0) return;
+  dailySummarySent = true;
+
+  // Reset for next day
+  setTimeout(() => { dailySummarySent = false; }, 6 * 3600 * 1000); // reset after 6 hours
+
+  try {
+    const summary = [
+      `Trading cycles: ${dailyCycleCount}`,
+      `Trades executed: ${dailyTradeCount}`,
+      dailyErrorCount > 0 ? `Errors: ${dailyErrorCount}` : null,
+      `Monitored symbols: ${symbols.join(", ")}`,
+    ].filter(Boolean).join("\n");
+
+    await notify({
+      level: "info",
+      category: "daily",
+      title: `Daily Scheduler Summary`,
+      message: summary,
+      data: { cycles: dailyCycleCount, trades: dailyTradeCount, errors: dailyErrorCount },
+    });
+    console.log("[Scheduler] Daily summary notification sent.");
+  } catch (err) {
+    console.error("[Scheduler] Failed to send daily summary:", err);
   }
 }
 

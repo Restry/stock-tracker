@@ -21,8 +21,8 @@ export interface DashboardData {
   trades: Trade[];
   loading: boolean;
   actionLoading: string;
-  activeTab: "decisions" | "history" | "logs";
-  setActiveTab: (tab: "decisions" | "history" | "logs") => void;
+  activeTab: "decisions" | "history" | "logs" | "backtest";
+  setActiveTab: (tab: "decisions" | "history" | "logs" | "backtest") => void;
   lastUpdate: Date | null;
   health: HealthStatus | null;
   techIndicators: TechIndicators | null;
@@ -52,7 +52,7 @@ export function useDashboardData(): DashboardData {
   const [trades, setTrades] = useState<Trade[]>([]);
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState("");
-  const [activeTab, setActiveTab] = useState<"decisions" | "history" | "logs">("decisions");
+  const [activeTab, setActiveTab] = useState<"decisions" | "history" | "logs" | "backtest">("decisions");
   const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
   const [health, setHealth] = useState<HealthStatus | null>(null);
   const [techIndicators, setTechIndicators] = useState<TechIndicators | null>(null);
